@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Photos</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------ setup -->
+<main id="setup" class="screen setup" hidden>
+  <h1>Connect a bucket</h1>
+  <p class="lede">
+    Photos are read straight from S3 in your browser. Nothing is uploaded
+    anywhere, and there is no server in between.
+  </p>
+
+  <form id="setup-form" autocomplete="off">
+    <label for="endpoint">Endpoint</label>
+    <input id="endpoint" name="endpoint" type="text" spellcheck="false" required
+           value="https://s3.fr-par.scw.cloud" list="endpoints">
+    <datalist id="endpoints">
+      <option value="https://s3.fr-par.scw.cloud">Scaleway &mdash; Paris</option>
+      <option value="https://s3.nl-ams.scw.cloud">Scaleway &mdash; Amsterdam</option>
+      <option value="https://s3.pl-waw.scw.cloud">Scaleway &mdash; Warsaw</option>
+      <option value="https://s3.eu-west-1.amazonaws.com">AWS &mdash; Ireland</option>
+    </datalist>
+
+    <div class="pair">
+      <div>
+        <label for="region">Region</label>
+        <input id="region" name="region" type="text" spellcheck="false" required value="fr-par">
+      </div>
+      <div>
+        <label for="bucket">Bucket</label>
+        <input id="bucket" name="bucket" type="text" spellcheck="false" required placeholder="my-photos">
+      </div>
+    </div>
+
+    <label for="accessKey">Access key ID</label>
+    <input id="accessKey" name="accessKey" type="text" spellcheck="false" required placeholder="SCW…">
+
+    <label for="secretKey">Secret access key</label>
+    <input id="secretKey" name="secretKey" type="password" spellcheck="false" required>
+
+    <label for="sessionToken">Session token <span class="opt">optional</span></label>
+    <textarea id="sessionToken" name="sessionToken" rows="2" spellcheck="false"></textarea>
+
+    <label for="googleApiKey">Google API key <span class="opt">optional</span></label>
+    <input id="googleApiKey" name="googleApiKey" type="password" spellcheck="false">
+    <p class="hint">
+      Enables label search in Danish and &ldquo;did you mean&rdquo; suggestions.
+      Without one, search still matches filenames, OCR text, English labels and
+      places. Prefer a second key restricted by HTTP referrer to this origin
+      &mdash; the phone&rsquo;s key cannot be, and it is already readable inside
+      the metadata snapshot in your bucket.
+    </p>
+
+    <p class="warn">
+      The secret is stored unencrypted in this browser. Use a
+      <strong>read-only, bucket-scoped</strong> key.
+    </p>
+
+    <p id="setup-error" class="error" hidden></p>
+    <button id="setup-submit" type="submit">Connect</button>
+  </form>
+</main>
+
+<!-- ---------------------------------------------------------- gallery -->
+<div id="gallery" class="screen gallery" hidden>
+  <header class="topbar">
+    <h1>Photos</h1>
+    <form id="search-form" class="search" role="search">
+      <input id="search-input" name="q" type="search" autocomplete="off"
+             spellcheck="false" placeholder="Search photos" aria-label="Search photos">
+      <button id="search-clear" type="button" class="ghost" hidden
+              aria-label="Clear search">&times;</button>
+    </form>
+    <div id="status" class="status" hidden></div>
+    <button id="forget" type="button" class="ghost">Forget credentials</button>
+  </header>
+
+  <div id="search-summary" class="search-summary" hidden></div>
+  <div id="search-chips" class="chips" hidden></div>
+
+  <div id="scroller" class="scroller">
+    <div id="grid" class="grid"></div>
+  </div>
+
+  <nav id="rail" class="rail" aria-label="Jump to year"></nav>
+</div>
+
+<!-- ---------------------------------------------------------- failure -->
+<main id="failure" class="screen failure" hidden>
+  <h1 id="failure-title"></h1>
+  <div id="failure-detail"></div>
+</main>
+
+<div id="lightbox" hidden></div>
+
+<script type="module" src="dist/main.js"></script>
+</body>
+</html>

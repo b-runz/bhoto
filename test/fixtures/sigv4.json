@@ -1,0 +1,145 @@
+[
+  {
+    "name": "scaleway plain photo",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": "2022/08/29/IMG_1234.jpg",
+    "expires": 3600,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=3e1892b844153b1743820abee5885e2d407d72dec9d7d500523da7de9395f6ba"
+  },
+  {
+    "name": "endpoint with trailing slash",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud/",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": "2022/08/29/IMG_1234.jpg",
+    "expires": 3600,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=3e1892b844153b1743820abee5885e2d407d72dec9d7d500523da7de9395f6ba"
+  },
+  {
+    "name": "bare host endpoint",
+    "creds": {
+      "endpoint": "s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": "2022/08/29/IMG_1234.jpg",
+    "expires": 3600,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=3e1892b844153b1743820abee5885e2d407d72dec9d7d500523da7de9395f6ba"
+  },
+  {
+    "name": "aws regression",
+    "creds": {
+      "endpoint": "https://s3.eu-west-1.amazonaws.com",
+      "region": "eu-west-1",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": "2022/08/29/IMG_1234.jpg",
+    "expires": 3600,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.eu-west-1.amazonaws.com/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Feu-west-1%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=938dd36a52df1921f6d19378e8a644312fe8befc1e3617e099333ad76ffef557"
+  },
+  {
+    "name": "awkward characters in key",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": "2022/08/29/café (1) & co!.jpg",
+    "expires": 300,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/2022/08/29/caf%C3%A9%20%281%29%20%26%20co%21.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8588a9a2215c8a6c27002a873381afad8d99e1feba04725dc937d49e68d32b80"
+  },
+  {
+    "name": "session token with / + =",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+      "sessionToken": "FQoDYXdzEC//////////wEaDNotAReal+Token/w=="
+    },
+    "key": "2022/08/29/IMG_1234.jpg",
+    "expires": 300,
+    "query": {},
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=300&X-Amz-Security-Token=FQoDYXdzEC%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaDNotAReal%2BToken%2Fw%3D%3D&X-Amz-SignedHeaders=host&X-Amz-Signature=b4243cad5fed85f72bbda0c9bd925b15256171b6600fb6194150d3aa4ade6317"
+  },
+  {
+    "name": "thumbnail with content-type override",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": ".thumbs/2022/08/29/IMG_1234.jpg",
+    "expires": 3600,
+    "query": {
+      "response-content-type": "image/jpeg"
+    },
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/.thumbs/2022/08/29/IMG_1234.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&response-content-type=image%2Fjpeg&X-Amz-Signature=239cb70625f91465b4509fbaec86196671eff9e3fafa705536e9f605ca15ffc4"
+  },
+  {
+    "name": "video thumbnail with content-type override",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+    },
+    "key": ".thumbs/2022/08/29/VID_0001.mp4",
+    "expires": 3600,
+    "query": {
+      "response-content-type": "image/jpeg"
+    },
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/.thumbs/2022/08/29/VID_0001.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&response-content-type=image%2Fjpeg&X-Amz-Signature=43be736b2e71872822f2b90c8dd240ae929f9974ff7847a1760f37296306b228"
+  },
+  {
+    "name": "override plus session token",
+    "creds": {
+      "endpoint": "https://s3.fr-par.scw.cloud",
+      "region": "fr-par",
+      "bucket": "my-bucket",
+      "accessKey": "SCWXXXXXXXXXXXXXXXXX",
+      "secretKey": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+      "sessionToken": "FQoDYXdzEC//////////wEaDNotAReal+Token/w=="
+    },
+    "key": ".thumbs/2022/08/29/VID_0001.mp4",
+    "expires": 3600,
+    "query": {
+      "response-content-type": "image/jpeg"
+    },
+    "amzDate": "20260831T123456Z",
+    "url": "https://my-bucket.s3.fr-par.scw.cloud/.thumbs/2022/08/29/VID_0001.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=SCWXXXXXXXXXXXXXXXXX%2F20260831%2Ffr-par%2Fs3%2Faws4_request&X-Amz-Date=20260831T123456Z&X-Amz-Expires=3600&X-Amz-Security-Token=FQoDYXdzEC%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaDNotAReal%2BToken%2Fw%3D%3D&X-Amz-SignedHeaders=host&response-content-type=image%2Fjpeg&X-Amz-Signature=d7eb5beea7d0c2a0ee1b080c17f2010d7094e79e030bf66e8599e1f525e2b647"
+  }
+]

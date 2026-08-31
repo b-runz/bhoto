@@ -1,0 +1,8 @@
+node_modules/
+*.log
+cors-backup.json
+cors-merged.json
+cors.json
+nul
+.claude/worktrees/
+.superpowers/

@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --outdir dist --target browser && bun build src/search/worker.ts --outfile dist/search-worker.js --target browser --format iife",
-    "dev": "bun build src/main.ts --outdir dist --target browser --watch",
+    "build": "bun run assets && bun build src/main.ts --outdir dist --target browser && bun build src/search/worker.ts --outfile dist/search-worker.js --target browser --format iife",
+    "dev": "bun run assets && bun build src/main.ts --outdir dist --target browser --watch",
     "dev:worker": "bun build src/search/worker.ts --outfile dist/search-worker.js --target browser --format iife --watch",
     "vendor": "cp node_modules/sql.js/dist/sql-wasm.js node_modules/sql.js/dist/sql-wasm.wasm dist/",
-    "serve": "miniserve --index index.html --port 8080 .",
+    "assets": "cp index.html dist/index.html && cp -R css dist/",
+    "serve": "miniserve --index index.html --port 8080 dist",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

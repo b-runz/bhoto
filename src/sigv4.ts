@@ -13,10 +13,15 @@ const UNSIGNED = "UNSIGNED-PAYLOAD";
 
 const encoder = new TextEncoder();
 
+/** The verbs this app signs. The method is part of the canonical request. */
+export type PresignMethod = "GET" | "DELETE";
+
 export interface PresignOptions {
   creds: Creds;
   /** Object key, unencoded. */
   key: string;
+  /** Defaults to GET. */
+  method?: PresignMethod;
   /** Lifetime in seconds. */
   expires?: number;
   /** Extra signed query params, e.g. response-content-type. */
@@ -31,8 +36,9 @@ export interface PresignOptions {
  */
 const signingKeys = new Map<string, Promise<Uint8Array>>();
 
-export async function presignGet(options: PresignOptions): Promise<string> {
+export async function presign(options: PresignOptions): Promise<string> {
   const { creds, key } = options;
+  const method = options.method ?? "GET";
   const expires = options.expires ?? 3600;
   const now = options.now ?? new Date();
 
@@ -61,7 +67,7 @@ export async function presignGet(options: PresignOptions): Promise<string> {
   const query = canonicalQuery(params);
 
   const canonicalRequest = [
-    "GET",
+    method,
     canonicalUri,
     query,
     `host:${host}\n`,
@@ -81,6 +87,16 @@ export async function presignGet(options: PresignOptions): Promise<string> {
   );
 
   return `https://${host}${canonicalUri}?${query}&X-Amz-Signature=${signature}`;
+}
+
+/** A presigned URL that reads an object. */
+export function presignGet(options: Omit<PresignOptions, "method">): Promise<string> {
+  return presign({ ...options, method: "GET" });
+}
+
+/** A presigned URL that deletes an object. */
+export function presignDelete(options: Omit<PresignOptions, "method">): Promise<string> {
+  return presign({ ...options, method: "DELETE" });
 }
 
 /** Accepts "https://s3.fr-par.scw.cloud", "s3.fr-par.scw.cloud/", etc. */

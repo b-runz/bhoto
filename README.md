@@ -14,8 +14,10 @@ bun run build
 bun run serve       # http://localhost:8080
 ```
 
-Then enter endpoint, region, bucket and a **read-only, bucket-scoped** API
-key. Credentials are stored unencrypted in IndexedDB, so scope the key.
+Then enter endpoint, region, bucket and a **bucket-scoped** API key.
+Credentials are stored unencrypted in IndexedDB, so scope the key. Read access
+is all the gallery needs; see [Deleting photos](#deleting-photos) for the one
+feature that wants more.
 
 Serve over `http://localhost` or https — `crypto.subtle` does not exist on a
 `file://` origin, and everything here depends on it.
@@ -67,11 +69,38 @@ to this origin, which a key used by the phone app cannot — so prefer minting a
 second, restricted key and entering it on the setup screen rather than letting
 the app fall back to the phone's.
 
+## Deleting photos
+
+Hover a tile and tick its checkbox to start selecting; from there a plain
+click toggles, shift-click extends a range, and a bar at the bottom deletes or
+clears the selection. The lightbox has a trash button and takes the `Delete`
+key. Both confirm first, and both are permanent — unless the bucket has
+versioning, nothing here can undo them.
+
+Deleting a photo removes two objects: the original and its `.thumbs/` twin. A
+thumbnail that will not delete leaves a harmless orphan rather than failing
+the photo; an original that will not delete is reported and the photo stays.
+
+This needs more than read access: `s3:DeleteObject` on the key, and `DELETE`
+in the bucket's CORS rule. Without either, deletes fail and say so, and the
+rest of the app is unaffected.
+
+**The search index is not updated, by design.** `.meta/s3immich.db.gz` belongs
+to the phone app, which is also the only writer that survives — anything this
+app wrote there would be overwritten by the next push. The contract is instead
+that the phone reconciles: a row whose object is gone from the bucket is a row
+it drops. Until that runs, a search can match a key that no longer exists;
+results are intersected with the bucket listing, so such a key simply doesn't
+appear.
+
 ## Bucket prerequisites
 
 Listing is a `fetch`, so the bucket needs a CORS rule allowing GET from the
 app's origin. Images and video don't — a plain `src` isn't a CORS request.
 The app renders the exact rule to paste if listing fails.
+
+`scripts/set-cors.py` writes that rule without clobbering the ones already
+there; add `--allow-delete` to include `DELETE`.
 
 ## Development
 
@@ -81,8 +110,11 @@ bun run check       # tsc --noEmit — bun strips types without checking them
 bun test
 ```
 
-`dist/` is committed so the app can be served from any static host without a
-build step.
+`dist/` is self-contained and committed — `bun run build` copies `index.html`
+and `css/` into it alongside the bundles, so deploying means uploading `dist/`
+and nothing else, to any static host, with no build step at the other end.
+Edit `index.html` and `css/app.css` at the root; the copies inside `dist/` are
+build output and get overwritten.
 
 Tests cover the pure modules — `sigv4`, `justify`, key parsing, and everything
 under `src/search/` except the Worker, the IndexedDB glue and the live network
@@ -93,7 +125,8 @@ them holds the live bucket credential in the real snapshot; the import tests
 run sql.js against it under Bun.
 
 The signer is checked against `tools/gen_sigv4_fixtures.py`, an independent
-implementation of the AWS spec that shares no code with it; regenerate the
+implementation of the AWS spec that shares no code with it — for DELETE as
+well as GET, since the method is part of what gets signed; regenerate the
 fixtures with:
 
 ```sh

@@ -35,6 +35,8 @@ export interface GridOptions {
   creds: Creds;
   meta: MetaProvider;
   onOpen: (flatIndex: number) => void;
+  /** Fires whenever the selected set changes size. */
+  onSelectionChange?: (count: number) => void;
 }
 
 export class Grid {
@@ -50,6 +52,13 @@ export class Grid {
    * cache miss -- re-downloading thumbnails already on disk.
    */
   private thumbUrls = new Map<string, Promise<string>>();
+  /**
+   * Selected photos, by key rather than by index. Keys survive a reflow, an
+   * unmount and a re-render; indices survive none of those.
+   */
+  private selected = new Set<string>();
+  /** Flat index the next shift-click extends from. */
+  private anchor: number | null = null;
 
   constructor(private readonly options: GridOptions) {
     this.observer = new IntersectionObserver(
@@ -71,6 +80,8 @@ export class Grid {
   /** Sections must already be ordered newest first. */
   setSections(sections: Section[]): void {
     this.teardown();
+    this.selected.clear();
+    this.anchor = null;
     this.width = this.options.container.clientWidth;
 
     let flat = 0;
@@ -109,6 +120,56 @@ export class Grid {
     }
 
     this.options.container.replaceChildren(fragment);
+    this.syncSelection();
+  }
+
+  /** Selected keys, in the grid's own order. */
+  get selection(): string[] {
+    const chosen = this.selected;
+    return this.items.map((item) => item.key).filter((key) => chosen.has(key));
+  }
+
+  clearSelection(): void {
+    if (this.selected.size === 0) return;
+    this.selected.clear();
+    this.anchor = null;
+    this.syncSelection();
+  }
+
+  /** True once anything is selected: a plain click then toggles, not opens. */
+  private get selecting(): boolean {
+    return this.selected.size > 0;
+  }
+
+  private toggle(key: string): void {
+    if (!this.selected.delete(key)) this.selected.add(key);
+    this.syncSelection();
+  }
+
+  /** Inclusive, in either direction. */
+  private selectRange(from: number, to: number): void {
+    const items = this.items;
+    const low = Math.min(from, to);
+    const high = Math.max(from, to);
+    for (let at = low; at <= high; at++) {
+      const item = items[at];
+      if (item) this.selected.add(item.key);
+    }
+    this.syncSelection();
+  }
+
+  /**
+   * Repaints the selected state onto whatever is mounted. Tiles outside the
+   * window have no DOM to update, and pick their class up in `tile()` when
+   * they are painted.
+   */
+  private syncSelection(): void {
+    this.options.container.classList.toggle("selecting", this.selecting);
+    for (const el of this.options.container.querySelectorAll<HTMLElement>(".tile")) {
+      const key = el.dataset.key;
+      el.classList.toggle("selected", key !== undefined && this.selected.has(key));
+    }
+    this.options.onSelectionChange?.(this.selected.size);
   }
 
   /** Flattened chronological order — what the lightbox navigates. */
@@ -231,6 +292,8 @@ export class Grid {
     button.style.width = `${w}px`;
     button.style.height = `${h}px`;
     button.setAttribute("aria-label", item.key);
+    button.dataset.key = item.key;
+    if (this.selected.has(item.key)) button.classList.add("selected");
 
     const img = document.createElement("img");
     img.loading = "lazy";
@@ -255,9 +318,28 @@ export class Grid {
 
     void this.setThumb(img, item);
 
-    button.append(img);
-    button.addEventListener("click", () => {
-      this.options.onOpen(state.startIndex + indexInSection);
+    // A span, not a checkbox: the tile is already a <button>, and nesting
+    // one interactive control inside another is invalid HTML. The click is
+    // read off the target instead.
+    const check = document.createElement("span");
+    check.className = "tile-check";
+    check.setAttribute("aria-hidden", "true");
+
+    button.append(img, check);
+    button.addEventListener("click", (event) => {
+      const flat = state.startIndex + indexInSection;
+      const onCheck = (event.target as HTMLElement).closest(".tile-check") !== null;
+
+      if (!onCheck && !this.selecting) {
+        this.options.onOpen(flat);
+        return;
+      }
+      if (event.shiftKey && this.anchor !== null) {
+        this.selectRange(this.anchor, flat);
+        return;
+      }
+      this.toggle(item.key);
+      this.anchor = this.selected.size === 0 ? null : flat;
     });
     return button;
   }

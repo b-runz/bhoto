@@ -8,7 +8,7 @@ import { dateLabel } from "./keys";
 import { Lightbox } from "./lightbox";
 import { MeasuredProvider } from "./meta";
 import { Rail } from "./rail";
-import { listAll, NetworkError, S3Error, verify } from "./s3api";
+import { deleteItems, listAll, NetworkError, S3Error, verify } from "./s3api";
 import { presignGet } from "./sigv4";
 import { embedQuery, clearGoogleCaches, translateQuery } from "./search/google";
 import { searchNominatim } from "./search/nominatim";
@@ -122,13 +122,22 @@ async function boot(creds: Creds): Promise<void> {
   const meta = await MeasuredProvider.load();
   const scroller = el("scroller");
 
-  const lightbox = new Lightbox({ root: el("lightbox"), creds });
+  const lightbox = new Lightbox({
+    root: el("lightbox"),
+    creds,
+    onDelete: (item) => removePhotos([item.key]),
+  });
+
   const grid = new Grid({
     container: el("grid"),
     scroller,
     creds,
     meta,
     onOpen: (index) => lightbox.show(index),
+    onSelectionChange: (count) => {
+      el("selbar").hidden = count === 0;
+      el("selbar-count").textContent = `${count} selected`;
+    },
   });
 
   const rail = new Rail({
@@ -140,8 +149,11 @@ async function boot(creds: Creds): Promise<void> {
 
   /** The full library, as last rendered. Search filters this, never replaces it. */
   let library: Item[] = [];
+  /** What the grid is showing right now: the library, or a search's matches. */
+  let view: Item[] = [];
 
   const render = (items: Item[]): void => {
+    view = items;
     const sections = toSections(items, dateLabel);
     grid.setSections(sections);
     rail.setYears([...new Set(sections.map((s) => s.date.slice(0, 4)))]);
@@ -158,6 +170,47 @@ async function boot(creds: Creds): Promise<void> {
         : "",
     );
   };
+
+  /**
+   * Deletes photos from the bucket, then from the library. Resolves true if
+   * anything actually went.
+   *
+   * The bucket is the source of truth, so only keys S3 confirmed are dropped
+   * locally. Nothing here touches the search snapshot: that database belongs
+   * to the phone app, which drops rows whose object has gone.
+   */
+  const removePhotos = async (keys: string[]): Promise<boolean> => {
+    if (keys.length === 0) return false;
+    const what = keys.length === 1 ? "1 photo" : `${keys.length} photos`;
+    if (!confirm(`Delete ${what} from the bucket? This cannot be undone.`)) return false;
+
+    status(`Deleting ${what}…`, true);
+    const result = await deleteItems(creds, keys, {
+      onProgress: (done, total) => status(`Deleting ${done} of ${total}…`, true),
+    });
+
+    const gone = new Set(result.deleted);
+    if (gone.size > 0) {
+      library = library.filter((item) => !gone.has(item.key));
+      // Repaint before persisting: the objects are already gone either way,
+      // so a failed cache write must not leave them on screen.
+      render(view.filter((item) => !gone.has(item.key)));
+      // A stale cache self-heals -- the next boot's listing won't contain
+      // these keys, and `changed()` rewrites the manifest then.
+      await putManifest(library).catch(() => {});
+    }
+
+    const failure = result.failed[0];
+    status(
+      failure === undefined
+        ? ""
+        : `Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`,
+    );
+    return gone.size > 0;
+  };
+
+  el("selbar-clear").onclick = () => grid.clearSelection();
+  el("selbar-delete").onclick = () => void removePhotos(grid.selection);
 
   let ticking = false;
   scroller.addEventListener(
@@ -252,7 +305,7 @@ async function remoteSnapshot(creds: Creds): Promise<number | null> {
  */
 function importSnapshot(url: string, onProgress: (loaded: number, total: number) => void): Promise<ImportResult | null> {
   return new Promise((resolve) => {
-    const worker = new Worker("dist/search-worker.js");
+    const worker = new Worker("search-worker.js");
     const finish = (result: ImportResult | null): void => {
       worker.terminate();
       resolve(result);

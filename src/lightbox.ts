@@ -11,6 +11,11 @@ import type { Creds, Item } from "./types";
 export interface LightboxOptions {
   root: HTMLElement;
   creds: Creds;
+  /**
+   * Deletes the shown photo. Resolves true once it is gone, by which time
+   * the caller is expected to have pushed a shorter list in via setItems.
+   */
+  onDelete?: (item: Item) => Promise<boolean>;
 }
 
 export class Lightbox {
@@ -21,6 +26,8 @@ export class Lightbox {
   private caption: HTMLElement;
   /** Guards against a slow load from an earlier item overwriting a newer one. */
   private token = 0;
+  /** A held Delete key must not queue a second delete behind the first. */
+  private busy = false;
 
   constructor(private readonly options: LightboxOptions) {
     const { root } = options;
@@ -30,6 +37,7 @@ export class Lightbox {
 
     root.innerHTML = `
       <button class="lb-close" type="button" aria-label="Close">&times;</button>
+      <button class="lb-delete" type="button" aria-label="Delete">&#128465;&#xFE0E;</button>
       <button class="lb-nav lb-prev" type="button" aria-label="Previous">&#8249;</button>
       <div class="lb-stage"></div>
       <button class="lb-nav lb-next" type="button" aria-label="Next">&#8250;</button>
@@ -40,6 +48,10 @@ export class Lightbox {
     this.caption = root.querySelector(".lb-caption")!;
 
     root.querySelector(".lb-close")!.addEventListener("click", () => this.close());
+
+    const trash = root.querySelector<HTMLElement>(".lb-delete")!;
+    trash.hidden = options.onDelete === undefined;
+    trash.addEventListener("click", () => void this.remove());
     root.querySelector(".lb-prev")!.addEventListener("click", () => this.step(-1));
     root.querySelector(".lb-next")!.addEventListener("click", () => this.step(1));
     root.addEventListener("click", (event) => {
@@ -77,6 +89,36 @@ export class Lightbox {
     document.removeEventListener("keydown", this.onKeyDown);
   }
 
+  /**
+   * Deletes what is on screen, then shows whatever moved up into its place.
+   *
+   * The caller's re-render replaces `items` with a shorter list, so the same
+   * index now addresses the NEXT photo -- which is what deleting from a
+   * viewer should leave you looking at. Clamped for the last photo, closed
+   * when nothing is left.
+   */
+  private async remove(): Promise<void> {
+    const item = this.items[this.index];
+    if (!this.open || !item || this.busy) return;
+    const onDelete = this.options.onDelete;
+    if (!onDelete) return;
+
+    this.busy = true;
+    let gone: boolean;
+    try {
+      gone = await onDelete(item);
+    } finally {
+      this.busy = false;
+    }
+    if (!gone || !this.open) return;
+
+    if (this.items.length === 0) {
+      this.close();
+      return;
+    }
+    this.show(Math.min(this.index, this.items.length - 1));
+  }
+
   private step(delta: number): void {
     const next = this.index + delta;
     if (next < 0 || next >= this.items.length) return;
@@ -89,6 +131,7 @@ export class Lightbox {
     if (event.key === "Escape") this.close();
     else if (event.key === "ArrowLeft") this.step(-1);
     else if (event.key === "ArrowRight") this.step(1);
+    else if (event.key === "Delete") void this.remove();
     else return;
     event.preventDefault();
   };

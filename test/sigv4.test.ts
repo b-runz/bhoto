@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fixtures from "./fixtures/sigv4.json";
-import { clearSigningKeyCache, normaliseEndpoint, presignGet } from "../src/sigv4";
+import { clearSigningKeyCache, normaliseEndpoint, presign, presignGet } from "../src/sigv4";
 import type { Creds } from "../src/types";
 
 /**
@@ -8,14 +8,15 @@ import type { Creds } from "../src/types";
  * implementation of the AWS spec sharing no code with src/sigv4.ts.
  * Agreement between the two is the test.
  */
-describe("presignGet against an independent implementation", () => {
+describe("presign against an independent implementation", () => {
   for (const f of fixtures) {
     test(f.name, async () => {
-      const url = await presignGet({
+      const url = await presign({
         creds: f.creds as Creds,
         key: f.key,
         expires: f.expires,
         query: f.query as Record<string, string>,
+        method: f.method as "GET" | "DELETE",
         now: pinned(f.amzDate),
       });
       expect(url).toBe(f.url);
@@ -93,3 +94,30 @@ function pinned(amzDate: string): Date {
   );
   return new Date(iso);
 }
+
+describe("presign methods", () => {
+  const creds: Creds = {
+    endpoint: "https://s3.fr-par.scw.cloud",
+    region: "fr-par",
+    bucket: "my-bucket",
+    accessKey: "SCWXXXXXXXXXXXXXXXXX",
+    secretKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+  };
+  const at = pinned("20260831T123456Z");
+
+  test("the method reaches the signature", async () => {
+    const get = await presign({ creds, key: "2022/08/29/IMG_1234.jpg", method: "GET", now: at });
+    const del = await presign({ creds, key: "2022/08/29/IMG_1234.jpg", method: "DELETE", now: at });
+    expect(del).not.toBe(get);
+  });
+
+  test("defaults to GET, so presignGet is unchanged", async () => {
+    const key = "2022/08/29/IMG_1234.jpg";
+    expect(await presign({ creds, key, now: at })).toBe(await presignGet({ creds, key, now: at }));
+  });
+
+  test("the method is not carried in the query string", async () => {
+    const url = await presign({ creds, key: "2022/08/29/IMG_1234.jpg", method: "DELETE", now: at });
+    expect(url).not.toContain("DELETE");
+  });
+});

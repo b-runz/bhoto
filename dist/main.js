@@ -236,8 +236,9 @@ var SERVICE = "s3";
 var UNSIGNED = "UNSIGNED-PAYLOAD";
 var encoder = new TextEncoder;
 var signingKeys = new Map;
-async function presignGet(options) {
+async function presign(options) {
   const { creds, key } = options;
+  const method = options.method ?? "GET";
   const expires = options.expires ?? 3600;
   const now = options.now ?? new Date;
   const region = creds.region.trim();
@@ -259,7 +260,7 @@ async function presignGet(options) {
     params["X-Amz-Security-Token"] = token;
   const query = canonicalQuery(params);
   const canonicalRequest = [
-    "GET",
+    method,
     canonicalUri,
     query,
     `host:${host}
@@ -277,6 +278,12 @@ async function presignGet(options) {
 `);
   const signature = hex(await hmac(await signingKey(creds.secretKey, dateStamp, region), stringToSign));
   return `https://${host}${canonicalUri}?${query}&X-Amz-Signature=${signature}`;
+}
+function presignGet(options) {
+  return presign({ ...options, method: "GET" });
+}
+function presignDelete(options) {
+  return presign({ ...options, method: "DELETE" });
 }
 function normaliseEndpoint(endpoint) {
   return endpoint.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -352,6 +359,45 @@ function thumbUrl(creds, key) {
 function originalUrl(creds, key) {
   return presignGet({ creds, key });
 }
+async function deleteObject(creds, key, fetchImpl = fetch) {
+  const url = await presignDelete({ creds, key, expires: 300 });
+  let response;
+  try {
+    response = await fetchImpl(url, { method: "DELETE" });
+  } catch (cause) {
+    throw new NetworkError(cause);
+  }
+  if (response.ok)
+    return;
+  const body = await response.text();
+  throw new S3Error(xmlTag(body, "Code") ?? String(response.status), xmlTag(body, "Message") ?? response.statusText, response.status);
+}
+var DELETE_CONCURRENCY = 6;
+async function deleteItems(creds, keys, options = {}) {
+  const { onProgress, fetchImpl } = options;
+  const limit = Math.max(1, options.concurrency ?? DELETE_CONCURRENCY);
+  const result = { deleted: [], failed: [] };
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    for (;; ) {
+      const at = next++;
+      const key = keys[at];
+      if (key === undefined)
+        return;
+      try {
+        await deleteObject(creds, key, fetchImpl);
+        await deleteObject(creds, thumbKey(key), fetchImpl).catch(() => {});
+        result.deleted.push(key);
+      } catch (error) {
+        result.failed.push({ key, error });
+      }
+      onProgress?.(++done, keys.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, keys.length) }, worker));
+  return result;
+}
 async function listAll(creds, onProgress, signal) {
   const items = [];
   let token;
@@ -401,6 +447,11 @@ async function listPage(creds, token, signal, maxKeys = PAGE_SIZE) {
 async function verify(creds) {
   await listPage(creds, undefined, undefined, 1);
 }
+function xmlTag(xml, name) {
+  const found = new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml);
+  const value = found?.[1];
+  return value === undefined || value === "" ? null : value;
+}
 function text(scope, tag) {
   if (!scope)
     return null;
@@ -425,6 +476,8 @@ class Grid {
   observer;
   resize;
   thumbUrls = new Map;
+  selected = new Set;
+  anchor = null;
   constructor(options) {
     this.options = options;
     this.observer = new IntersectionObserver((entries) => {
@@ -443,6 +496,8 @@ class Grid {
   }
   setSections(sections) {
     this.teardown();
+    this.selected.clear();
+    this.anchor = null;
     this.width = this.options.container.clientWidth;
     let flat = 0;
     const fragment = document.createDocumentFragment();
@@ -473,6 +528,45 @@ class Grid {
       flat += section.items.length;
     }
     this.options.container.replaceChildren(fragment);
+    this.syncSelection();
+  }
+  get selection() {
+    const chosen = this.selected;
+    return this.items.map((item) => item.key).filter((key) => chosen.has(key));
+  }
+  clearSelection() {
+    if (this.selected.size === 0)
+      return;
+    this.selected.clear();
+    this.anchor = null;
+    this.syncSelection();
+  }
+  get selecting() {
+    return this.selected.size > 0;
+  }
+  toggle(key) {
+    if (!this.selected.delete(key))
+      this.selected.add(key);
+    this.syncSelection();
+  }
+  selectRange(from, to) {
+    const items = this.items;
+    const low = Math.min(from, to);
+    const high = Math.max(from, to);
+    for (let at = low;at <= high; at++) {
+      const item = items[at];
+      if (item)
+        this.selected.add(item.key);
+    }
+    this.syncSelection();
+  }
+  syncSelection() {
+    this.options.container.classList.toggle("selecting", this.selecting);
+    for (const el of this.options.container.querySelectorAll(".tile")) {
+      const key = el.dataset.key;
+      el.classList.toggle("selected", key !== undefined && this.selected.has(key));
+    }
+    this.options.onSelectionChange?.(this.selected.size);
   }
   get items() {
     return this.states.flatMap((state) => state.section.items);
@@ -575,6 +669,9 @@ class Grid {
     button.style.width = `${w}px`;
     button.style.height = `${h}px`;
     button.setAttribute("aria-label", item.key);
+    button.dataset.key = item.key;
+    if (this.selected.has(item.key))
+      button.classList.add("selected");
     const img = document.createElement("img");
     img.loading = "lazy";
     img.decoding = "async";
@@ -594,9 +691,23 @@ class Grid {
       this.setThumb(img, item);
     });
     this.setThumb(img, item);
-    button.append(img);
-    button.addEventListener("click", () => {
-      this.options.onOpen(state.startIndex + indexInSection);
+    const check = document.createElement("span");
+    check.className = "tile-check";
+    check.setAttribute("aria-hidden", "true");
+    button.append(img, check);
+    button.addEventListener("click", (event) => {
+      const flat = state.startIndex + indexInSection;
+      const onCheck = event.target.closest(".tile-check") !== null;
+      if (!onCheck && !this.selecting) {
+        this.options.onOpen(flat);
+        return;
+      }
+      if (event.shiftKey && this.anchor !== null) {
+        this.selectRange(this.anchor, flat);
+        return;
+      }
+      this.toggle(item.key);
+      this.anchor = this.selected.size === 0 ? null : flat;
     });
     return button;
   }
@@ -652,6 +763,7 @@ class Lightbox {
   stage;
   caption;
   token = 0;
+  busy = false;
   constructor(options) {
     this.options = options;
     const { root } = options;
@@ -660,6 +772,7 @@ class Lightbox {
     root.tabIndex = -1;
     root.innerHTML = `
       <button class="lb-close" type="button" aria-label="Close">&times;</button>
+      <button class="lb-delete" type="button" aria-label="Delete">&#128465;&#xFE0E;</button>
       <button class="lb-nav lb-prev" type="button" aria-label="Previous">&#8249;</button>
       <div class="lb-stage"></div>
       <button class="lb-nav lb-next" type="button" aria-label="Next">&#8250;</button>
@@ -668,6 +781,9 @@ class Lightbox {
     this.stage = root.querySelector(".lb-stage");
     this.caption = root.querySelector(".lb-caption");
     root.querySelector(".lb-close").addEventListener("click", () => this.close());
+    const trash = root.querySelector(".lb-delete");
+    trash.hidden = options.onDelete === undefined;
+    trash.addEventListener("click", () => void this.remove());
     root.querySelector(".lb-prev").addEventListener("click", () => this.step(-1));
     root.querySelector(".lb-next").addEventListener("click", () => this.step(1));
     root.addEventListener("click", (event) => {
@@ -701,6 +817,28 @@ class Lightbox {
   destroy() {
     document.removeEventListener("keydown", this.onKeyDown);
   }
+  async remove() {
+    const item = this.items[this.index];
+    if (!this.open || !item || this.busy)
+      return;
+    const onDelete = this.options.onDelete;
+    if (!onDelete)
+      return;
+    this.busy = true;
+    let gone;
+    try {
+      gone = await onDelete(item);
+    } finally {
+      this.busy = false;
+    }
+    if (!gone || !this.open)
+      return;
+    if (this.items.length === 0) {
+      this.close();
+      return;
+    }
+    this.show(Math.min(this.index, this.items.length - 1));
+  }
   step(delta) {
     const next = this.index + delta;
     if (next < 0 || next >= this.items.length)
@@ -717,6 +855,8 @@ class Lightbox {
       this.step(-1);
     else if (event.key === "ArrowRight")
       this.step(1);
+    else if (event.key === "Delete")
+      this.remove();
     else
       return;
     event.preventDefault();
@@ -1494,13 +1634,21 @@ async function boot(creds) {
   status("Loading…", true);
   const meta = await MeasuredProvider.load();
   const scroller = el("scroller");
-  const lightbox = new Lightbox({ root: el("lightbox"), creds });
+  const lightbox = new Lightbox({
+    root: el("lightbox"),
+    creds,
+    onDelete: (item) => removePhotos([item.key])
+  });
   const grid = new Grid({
     container: el("grid"),
     scroller,
     creds,
     meta,
-    onOpen: (index) => lightbox.show(index)
+    onOpen: (index) => lightbox.show(index),
+    onSelectionChange: (count) => {
+      el("selbar").hidden = count === 0;
+      el("selbar-count").textContent = `${count} selected`;
+    }
   });
   const rail = new Rail({
     root: el("rail"),
@@ -1509,7 +1657,9 @@ async function boot(creds) {
     timeline: grid
   });
   let library = [];
+  let view = [];
   const render = (items) => {
+    view = items;
     const sections = toSections(items, dateLabel);
     grid.setSections(sections);
     rail.setYears([...new Set(sections.map((s) => s.date.slice(0, 4)))]);
@@ -1520,6 +1670,28 @@ async function boot(creds) {
     render(items);
     status(items.length === 0 ? "No photos found. Expected keys shaped like 2022/08/29/IMG_1234.jpg" : "");
   };
+  const removePhotos = async (keys) => {
+    if (keys.length === 0)
+      return false;
+    const what = keys.length === 1 ? "1 photo" : `${keys.length} photos`;
+    if (!confirm(`Delete ${what} from the bucket? This cannot be undone.`))
+      return false;
+    status(`Deleting ${what}…`, true);
+    const result = await deleteItems(creds, keys, {
+      onProgress: (done, total) => status(`Deleting ${done} of ${total}…`, true)
+    });
+    const gone = new Set(result.deleted);
+    if (gone.size > 0) {
+      library = library.filter((item) => !gone.has(item.key));
+      render(view.filter((item) => !gone.has(item.key)));
+      await putManifest(library).catch(() => {});
+    }
+    const failure = result.failed[0];
+    status(failure === undefined ? "" : `Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`);
+    return gone.size > 0;
+  };
+  el("selbar-clear").onclick = () => grid.clearSelection();
+  el("selbar-delete").onclick = () => void removePhotos(grid.selection);
   let ticking = false;
   scroller.addEventListener("scroll", () => {
     if (ticking)
@@ -1592,7 +1764,7 @@ async function remoteSnapshot(creds) {
 }
 function importSnapshot(url, onProgress) {
   return new Promise((resolve) => {
-    const worker = new Worker("dist/search-worker.js");
+    const worker = new Worker("search-worker.js");
     const finish = (result) => {
       worker.terminate();
       resolve(result);

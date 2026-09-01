@@ -1,9 +1,9 @@
 /**
- * ListObjectsV2 and the errors it can hand back. Parsed with DOMParser --
- * no XML library.
+ * ListObjectsV2, object deletion, and the errors either can hand back.
+ * Parsed with DOMParser -- no XML library.
  */
 import { parseKey, thumbKey } from "./keys";
-import { presignGet } from "./sigv4";
+import { presignDelete, presignGet } from "./sigv4";
 import type { Creds, Item } from "./types";
 
 const PAGE_SIZE = 1000;
@@ -36,6 +36,98 @@ export function thumbUrl(creds: Creds, key: string): Promise<string> {
 /** Full-resolution original. Its stored content type is already correct. */
 export function originalUrl(creds: Creds, key: string): Promise<string> {
   return presignGet({ creds, key });
+}
+
+/**
+ * Deletes one object. S3 is idempotent here: a key that is already gone
+ * still answers 204, so a photo whose thumbnail was never generated is not
+ * an error.
+ *
+ * Unlike listPage this reads the error body with a regex rather than
+ * DOMParser. An S3 error is two flat tags, not a document -- and DOMParser
+ * does not exist outside a browser, which is what keeps this path testable.
+ */
+export async function deleteObject(
+  creds: Creds,
+  key: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const url = await presignDelete({ creds, key, expires: 300 });
+
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { method: "DELETE" });
+  } catch (cause) {
+    throw new NetworkError(cause);
+  }
+  if (response.ok) return;
+
+  const body = await response.text();
+  throw new S3Error(
+    xmlTag(body, "Code") ?? String(response.status),
+    xmlTag(body, "Message") ?? response.statusText,
+    response.status,
+  );
+}
+
+export interface DeleteOptions {
+  /** Photos deleted so far, out of `total`. Fires once per photo. */
+  onProgress?: (done: number, total: number) => void;
+  /** Simultaneous photos in flight. Each one is two requests. */
+  concurrency?: number;
+  fetchImpl?: typeof fetch;
+}
+
+export interface DeleteResult {
+  /** Keys whose original is gone from the bucket. */
+  deleted: string[];
+  failed: Array<{ key: string; error: unknown }>;
+}
+
+const DELETE_CONCURRENCY = 6;
+
+/**
+ * Deletes originals and their thumbnails, a few photos at a time.
+ *
+ * The original is what decides the outcome. A thumbnail that will not delete
+ * leaves an orphan under .thumbs/, which is invisible and harmless; dropping
+ * the photo from the library anyway is better than keeping a row whose
+ * original has already gone.
+ */
+export async function deleteItems(
+  creds: Creds,
+  keys: string[],
+  options: DeleteOptions = {},
+): Promise<DeleteResult> {
+  const { onProgress, fetchImpl } = options;
+  const limit = Math.max(1, options.concurrency ?? DELETE_CONCURRENCY);
+
+  const result: DeleteResult = { deleted: [], failed: [] };
+  let next = 0;
+  let done = 0;
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const at = next++;
+      const key = keys[at];
+      if (key === undefined) return;
+
+      try {
+        await deleteObject(creds, key, fetchImpl);
+        // Best effort, and deliberately after the original: a thumbnail
+        // deleted for a photo that then failed would leave a blank tile.
+        await deleteObject(creds, thumbKey(key), fetchImpl).catch(() => {});
+        result.deleted.push(key);
+      } catch (error) {
+        result.failed.push({ key, error });
+      }
+
+      onProgress?.(++done, keys.length);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, keys.length) }, worker));
+  return result;
 }
 
 export interface ListProgress {
@@ -117,6 +209,13 @@ export async function listPage(
 /** Validate credentials with the cheapest possible real request. */
 export async function verify(creds: Creds): Promise<void> {
   await listPage(creds, undefined, undefined, 1);
+}
+
+/** First occurrence of a flat XML tag's text, or null. */
+function xmlTag(xml: string, name: string): string | null {
+  const found = new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml);
+  const value = found?.[1];
+  return value === undefined || value === "" ? null : value;
 }
 
 function text(scope: Element | null, tag: string): string | null {

@@ -7,8 +7,12 @@
   // src/search/suggest.ts
   var EMBEDDING_MODEL = "gemini-embedding-001";
 
+  // src/search/local.ts
+  var INDEX_FORMAT = 2;
+
   // src/search/import.ts
   var DIMENSIONS = 768;
+  var RENDERABLE = "remote_key <> '' AND visibility = 0";
   function rows(db, sql) {
     const stmt = db.prepare(sql);
     const out = [];
@@ -23,63 +27,55 @@
   function buildIndex(db) {
     const keys = [];
     const keyIndex = new Map;
-    for (const row of rows(db, "SELECT id FROM remote_asset_entity WHERE deleted_at IS NULL ORDER BY id")) {
+    for (const row of rows(db, `SELECT remote_key FROM gallery_asset WHERE ${RENDERABLE} ORDER BY remote_key`)) {
       const key = String(row[0]);
       keyIndex.set(key, keys.length);
       keys.push(key);
     }
     const byTerm = new Map;
-    for (const row of rows(db, `SELECT DISTINCT LOWER(l.label) AS term, l.asset_id
-       FROM asset_label_entity l
-       JOIN remote_asset_entity r ON r.id = l.asset_id
-      WHERE r.deleted_at IS NULL`)) {
-      const term = String(row[0]);
-      const at = keyIndex.get(String(row[1]));
-      if (at === undefined)
-        continue;
-      const list = byTerm.get(term);
-      if (list === undefined)
-        byTerm.set(term, [at]);
-      else
-        list.push(at);
-    }
-    const labelTerms = [...byTerm.keys()].sort();
-    const labelOffsets = new Uint32Array(labelTerms.length + 1);
-    let total = 0;
-    for (let t = 0;t < labelTerms.length; t++) {
-      labelOffsets[t] = total;
-      total += byTerm.get(labelTerms[t]).length;
-    }
-    labelOffsets[labelTerms.length] = total;
-    const labelPostings = new Uint32Array(total);
-    let cursor = 0;
-    for (const term of labelTerms) {
-      for (const at of byTerm.get(term))
-        labelPostings[cursor++] = at;
-    }
-    const ocrKeyList = [];
-    const ocrText = [];
-    for (const row of rows(db, `SELECT f.c0 AS asset_id, f.c1 AS ocr_text
-       FROM asset_fts_content f
-       JOIN remote_asset_entity r ON r.id = f.c0
-      WHERE r.deleted_at IS NULL AND f.c1 IS NOT NULL AND f.c1 <> ''`)) {
+    for (const row of rows(db, `SELECT remote_key, name_normalized, label_text, camera_text, ocr_text
+       FROM gallery_asset WHERE ${RENDERABLE}`)) {
       const at = keyIndex.get(String(row[0]));
       if (at === undefined)
         continue;
-      const text = normalize(String(row[1]));
-      if (text === "")
-        continue;
-      ocrKeyList.push(at);
-      ocrText.push(text);
+      const tokens = new Set;
+      for (let column = 1;column <= 4; column++) {
+        const value = row[column];
+        if (value === null || value === undefined)
+          continue;
+        const text = normalize(String(value));
+        if (text === "")
+          continue;
+        for (const token of text.split(" "))
+          tokens.add(token);
+      }
+      for (const token of tokens) {
+        const list = byTerm.get(token);
+        if (list === undefined)
+          byTerm.set(token, [at]);
+        else
+          list.push(at);
+      }
+    }
+    const terms = [...byTerm.keys()].sort();
+    const offsets = new Uint32Array(terms.length + 1);
+    let total = 0;
+    for (let t = 0;t < terms.length; t++) {
+      offsets[t] = total;
+      total += byTerm.get(terms[t]).length;
+    }
+    offsets[terms.length] = total;
+    const postings = new Uint32Array(total);
+    let cursor = 0;
+    for (const term of terms) {
+      for (const at of byTerm.get(term).sort((a, b) => a - b))
+        postings[cursor++] = at;
     }
     const geoKeyList = [];
     const lats = [];
     const lons = [];
-    for (const row of rows(db, `SELECT e.asset_id, e.latitude, e.longitude
-       FROM remote_exif_entity e
-       JOIN remote_asset_entity r ON r.id = e.asset_id
-      WHERE r.deleted_at IS NULL
-        AND e.latitude IS NOT NULL AND e.longitude IS NOT NULL`)) {
+    for (const row of rows(db, `SELECT remote_key, latitude, longitude FROM gallery_asset
+      WHERE ${RENDERABLE} AND has_location = 1`)) {
       const at = keyIndex.get(String(row[0]));
       if (at === undefined)
         continue;
@@ -91,11 +87,15 @@
       lats.push(lat);
       lons.push(lon);
     }
-    const live = new Set(labelTerms);
+    const live = new Set;
+    for (const row of rows(db, `SELECT DISTINCT LOWER(l.label) FROM gallery_label l
+       JOIN gallery_asset a ON a.checksum = l.checksum
+      WHERE a.remote_key <> '' AND a.visibility = 0`)) {
+      live.add(String(row[0]));
+    }
     const embeddingLabels = [];
     const vectorChunks = [];
-    for (const row of rows(db, `SELECT label, embedding FROM label_embedding_entity
-      WHERE model = '${EMBEDDING_MODEL}'`)) {
+    for (const row of rows(db, `SELECT label, embedding FROM label_embedding WHERE model = '${EMBEDDING_MODEL}'`)) {
       const label = String(row[0]).toLowerCase();
       if (!live.has(label))
         continue;
@@ -109,17 +109,21 @@
     }
     const vectors = new Float32Array(embeddingLabels.length * DIMENSIONS);
     vectorChunks.forEach((chunk, i) => vectors.set(chunk, i * DIMENSIONS));
-    const keyRows = rows(db, "SELECT string_value FROM store_entity WHERE id = 2002");
-    const rawKey = keyRows[0]?.[0];
-    const apiKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : null;
+    let apiKey = null;
+    const hasStore = rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'store_entity'");
+    if (hasStore.length > 0) {
+      const keyRows = rows(db, "SELECT string_value FROM store_entity WHERE id = 2002");
+      const rawKey = keyRows[0]?.[0];
+      if (typeof rawKey === "string" && rawKey !== "")
+        apiKey = rawKey;
+    }
     return {
       index: {
+        format: INDEX_FORMAT,
         keys,
-        labelTerms,
-        labelOffsets,
-        labelPostings,
-        ocrKeys: Uint32Array.from(ocrKeyList),
-        ocrText,
+        terms,
+        offsets,
+        postings,
         geoKeys: Uint32Array.from(geoKeyList),
         geoLat: Float64Array.from(lats),
         geoLon: Float64Array.from(lons)

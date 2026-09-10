@@ -8,6 +8,7 @@
  * it.
  */
 import { getSearch, putSearchAll } from "../db";
+import { INDEX_FORMAT } from "./local";
 import type { Embeddings } from "./suggest";
 import type { SearchIndex } from "./local";
 import type { ImportResult } from "./import";
@@ -36,8 +37,49 @@ export function saveImport(result: ImportResult, lastModified: number): Promise<
   ]);
 }
 
+/**
+ * Whether a stored record is an index this build can search.
+ *
+ * The store is a plain key/value bag with no schema, and a viewer upgraded
+ * over an older one finds whatever that one wrote still sitting there. The
+ * pre-migration record has separate label and OCR columns and no `format` at
+ * all, so it reads as absent and the boot sequence imports over it rather
+ * than handing `matchTokens` an index whose `terms` array does not exist.
+ *
+ * Structured clone preserves typed arrays, so a record written by this build
+ * comes back with its `Uint32Array`s intact; anything else did not come from
+ * `saveImport` and is not trusted.
+ */
+export function isCurrentIndex(value: unknown): value is SearchIndex {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<SearchIndex>;
+  return (
+    candidate.format === INDEX_FORMAT &&
+    Array.isArray(candidate.keys) &&
+    Array.isArray(candidate.terms) &&
+    candidate.offsets instanceof Uint32Array &&
+    candidate.postings instanceof Uint32Array &&
+    candidate.geoKeys instanceof Uint32Array &&
+    candidate.geoLat instanceof Float64Array &&
+    candidate.geoLon instanceof Float64Array
+  );
+}
+
+/** The stored index, or null when there is none this build can search. */
 export async function loadIndex(): Promise<SearchIndex | null> {
-  return (await getSearch<SearchIndex>(INDEX)) ?? null;
+  const stored = await getSearch<unknown>(INDEX);
+  return isCurrentIndex(stored) ? stored : null;
+}
+
+/**
+ * Whether search has a usable index already. The boot sequence pairs this
+ * with {@link getSnapshot}: a stored `lastModified` with no index behind it
+ * -- which is what an upgrade across the index format looks like -- has to
+ * count as nothing stored, or the unchanged `lastModified` would suppress the
+ * re-import forever.
+ */
+export async function hasCurrentIndex(): Promise<boolean> {
+  return (await loadIndex()) !== null;
 }
 
 export async function loadEmbeddings(): Promise<Embeddings | null> {

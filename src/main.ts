@@ -13,7 +13,7 @@ import { presignGet } from "./sigv4";
 import { embedQuery, clearGoogleCaches, translateQuery } from "./search/google";
 import { searchNominatim } from "./search/nominatim";
 import { runSearch, suggestFor } from "./search/search";
-import { getSnapshot, loadApiKey, loadEmbeddings, loadIndex, saveImport } from "./search/store";
+import { getSnapshot, hasCurrentIndex, loadApiKey, loadEmbeddings, loadIndex, saveImport } from "./search/store";
 import type { SearchDeps } from "./search/search";
 import type { SearchIndex } from "./search/local";
 import type { ImportResult } from "./search/import";
@@ -257,7 +257,17 @@ async function boot(creds: Creds): Promise<void> {
 
   wireSearch(creds, () => library, render);
 
-  const [remote, local] = await Promise.all([remoteSnapshot(creds), getSnapshot()]);
+  // A stored `lastModified` with no searchable index behind it -- the
+  // pre-migration index format, or a record lost while the snapshot marker
+  // survived -- counts as nothing stored. Without this the unchanged remote
+  // `lastModified` would equal the stale local one and the re-import the new
+  // format needs would never fire.
+  const [remote, marker, hasIndex] = await Promise.all([
+    remoteSnapshot(creds),
+    getSnapshot(),
+    hasCurrentIndex(),
+  ]);
+  const local = hasIndex ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });

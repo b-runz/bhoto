@@ -1352,49 +1352,260 @@ async function searchNominatim(query, options = {}) {
 }
 
 // src/search/tokenize.ts
-function normalize(text2) {
-  return text2.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+var DIACRITIC_MAP = {
+  À: "A",
+  Á: "A",
+  Â: "A",
+  Ã: "A",
+  Ä: "A",
+  Å: "A",
+  Ā: "A",
+  Ă: "A",
+  Ą: "A",
+  à: "a",
+  á: "a",
+  â: "a",
+  ã: "a",
+  ä: "a",
+  å: "a",
+  ā: "a",
+  ă: "a",
+  ą: "a",
+  Æ: "AE",
+  æ: "ae",
+  Ç: "C",
+  Ć: "C",
+  Ĉ: "C",
+  Ċ: "C",
+  Č: "C",
+  ç: "c",
+  ć: "c",
+  ĉ: "c",
+  ċ: "c",
+  č: "c",
+  Ð: "D",
+  Ď: "D",
+  Đ: "D",
+  ð: "d",
+  ď: "d",
+  đ: "d",
+  È: "E",
+  É: "E",
+  Ê: "E",
+  Ë: "E",
+  Ē: "E",
+  Ĕ: "E",
+  Ė: "E",
+  Ę: "E",
+  Ě: "E",
+  è: "e",
+  é: "e",
+  ê: "e",
+  ë: "e",
+  ē: "e",
+  ĕ: "e",
+  ė: "e",
+  ę: "e",
+  ě: "e",
+  Ĝ: "G",
+  Ğ: "G",
+  Ġ: "G",
+  Ģ: "G",
+  ĝ: "g",
+  ğ: "g",
+  ġ: "g",
+  ģ: "g",
+  Ĥ: "H",
+  Ħ: "H",
+  ĥ: "h",
+  ħ: "h",
+  Ì: "I",
+  Í: "I",
+  Î: "I",
+  Ï: "I",
+  Ĩ: "I",
+  Ī: "I",
+  Ĭ: "I",
+  Į: "I",
+  İ: "I",
+  ì: "i",
+  í: "i",
+  î: "i",
+  ï: "i",
+  ĩ: "i",
+  ī: "i",
+  ĭ: "i",
+  į: "i",
+  ı: "i",
+  Ĳ: "IJ",
+  ĳ: "ij",
+  Ĵ: "J",
+  ĵ: "j",
+  Ķ: "K",
+  ķ: "k",
+  Ĺ: "L",
+  Ļ: "L",
+  Ľ: "L",
+  Ŀ: "L",
+  Ł: "L",
+  ĺ: "l",
+  ļ: "l",
+  ľ: "l",
+  ŀ: "l",
+  ł: "l",
+  Ñ: "N",
+  Ń: "N",
+  Ņ: "N",
+  Ň: "N",
+  Ŋ: "N",
+  ñ: "n",
+  ń: "n",
+  ņ: "n",
+  ň: "n",
+  ŋ: "n",
+  ŉ: "n",
+  Ò: "O",
+  Ó: "O",
+  Ô: "O",
+  Õ: "O",
+  Ö: "O",
+  Ø: "O",
+  Ō: "O",
+  Ŏ: "O",
+  Ő: "O",
+  ò: "o",
+  ó: "o",
+  ô: "o",
+  õ: "o",
+  ö: "o",
+  ø: "o",
+  ō: "o",
+  ŏ: "o",
+  ő: "o",
+  Œ: "OE",
+  œ: "oe",
+  Ŕ: "R",
+  Ŗ: "R",
+  Ř: "R",
+  ŕ: "r",
+  ŗ: "r",
+  ř: "r",
+  Ś: "S",
+  Ŝ: "S",
+  Ş: "S",
+  Š: "S",
+  ś: "s",
+  ŝ: "s",
+  ş: "s",
+  š: "s",
+  ß: "ss",
+  Ţ: "T",
+  Ť: "T",
+  Ŧ: "T",
+  ţ: "t",
+  ť: "t",
+  ŧ: "t",
+  Ù: "U",
+  Ú: "U",
+  Û: "U",
+  Ü: "U",
+  Ũ: "U",
+  Ū: "U",
+  Ŭ: "U",
+  Ů: "U",
+  Ű: "U",
+  Ų: "U",
+  ù: "u",
+  ú: "u",
+  û: "u",
+  ü: "u",
+  ũ: "u",
+  ū: "u",
+  ŭ: "u",
+  ů: "u",
+  ű: "u",
+  ų: "u",
+  Ŵ: "W",
+  ŵ: "w",
+  Ý: "Y",
+  Ŷ: "Y",
+  Ÿ: "Y",
+  ý: "y",
+  ŷ: "y",
+  ÿ: "y",
+  Ź: "Z",
+  Ż: "Z",
+  Ž: "Z",
+  ź: "z",
+  ż: "z",
+  ž: "z"
+};
+function stripDiacritics(input) {
+  let result = "";
+  for (const char of input) {
+    result += DIACRITIC_MAP[char] ?? char;
+  }
+  return result;
+}
+var NON_ALPHANUMERIC = /[^\p{L}\p{Nd}]+/gu;
+function fold(text2) {
+  return stripDiacritics(text2).toLowerCase().replace(NON_ALPHANUMERIC, " ").trim();
 }
 
 // src/search/local.ts
-function matchLabels(index, term) {
-  const out = new Set;
-  const trimmed = term.trim().toLowerCase();
-  if (trimmed === "")
-    return out;
-  const needle = ` ${trimmed} `;
-  for (let t = 0;t < index.labelTerms.length; t++) {
-    if (!` ${index.labelTerms[t]} `.includes(needle))
+var INDEX_FORMAT = 2;
+function findTerm(terms, term) {
+  let lo = 0;
+  let hi = terms.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >>> 1;
+    const candidate = terms[mid];
+    if (candidate === term)
+      return mid;
+    if (candidate < term)
+      lo = mid + 1;
+    else
+      hi = mid - 1;
+  }
+  return -1;
+}
+function matchTokens(index, query) {
+  const folded = fold(query);
+  if (folded === "")
+    return new Set;
+  const tokens = folded.split(" ");
+  const termIndices = [];
+  for (const token of tokens) {
+    const t = findTerm(index.terms, token);
+    if (t === -1)
+      return new Set;
+    termIndices.push(t);
+  }
+  termIndices.sort((a, b) => index.offsets[a + 1] - index.offsets[a] - (index.offsets[b + 1] - index.offsets[b]));
+  let result = null;
+  for (const t of termIndices) {
+    const start = index.offsets[t];
+    const end = index.offsets[t + 1];
+    if (result === null) {
+      result = new Set;
+      for (let p = start;p < end; p++)
+        result.add(index.postings[p]);
       continue;
-    const start = index.labelOffsets[t];
-    const end = index.labelOffsets[t + 1];
-    for (let p = start;p < end; p++)
-      out.add(index.keys[index.labelPostings[p]]);
+    }
+    const next = new Set;
+    for (let p = start;p < end; p++) {
+      const posting = index.postings[p];
+      if (result.has(posting))
+        next.add(posting);
+    }
+    result = next;
+    if (result.size === 0)
+      break;
   }
-  return out;
-}
-function matchOcr(index, query) {
   const out = new Set;
-  const phrase = normalize(query);
-  if (phrase === "")
-    return out;
-  const needle = ` ${phrase} `;
-  for (let i = 0;i < index.ocrText.length; i++) {
-    if (` ${index.ocrText[i]} `.includes(needle))
-      out.add(index.keys[index.ocrKeys[i]]);
-  }
-  return out;
-}
-function matchNames(items, query) {
-  const out = new Set;
-  const needle = query.trim().toLowerCase();
-  if (needle === "")
-    return out;
-  for (const item of items) {
-    const name = item.key.slice(item.key.lastIndexOf("/") + 1);
-    if (name.toLowerCase().includes(needle))
-      out.add(item.key);
-  }
+  if (result !== null)
+    for (const keyIndex of result)
+      out.add(index.keys[keyIndex]);
   return out;
 }
 function pointsInBox(index, south, north, west, east) {
@@ -1432,16 +1643,10 @@ async function runSearch(query, deps) {
   const timeout = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const placePass = within(placeMatches(trimmed, deps), timeout, new Set);
   const translation = within(deps.translate(trimmed), timeout, null);
-  const found = new Set;
-  for (const key of matchLabels(deps.index, trimmed))
-    found.add(key);
-  for (const key of matchOcr(deps.index, trimmed))
-    found.add(key);
-  for (const key of matchNames(deps.items, trimmed))
-    found.add(key);
+  const found = matchTokens(deps.index, trimmed);
   const translated = await translation;
   if (translated !== null && translated !== "" && translated !== trimmed.toLowerCase()) {
-    for (const key of matchLabels(deps.index, translated))
+    for (const key of matchTokens(deps.index, translated))
       found.add(key);
   }
   for (const key of await placePass)
@@ -1535,8 +1740,18 @@ function saveImport(result, lastModified) {
     [SNAPSHOT, lastModified]
   ]);
 }
+function isCurrentIndex(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const candidate = value;
+  return candidate.format === INDEX_FORMAT && Array.isArray(candidate.keys) && Array.isArray(candidate.terms) && candidate.offsets instanceof Uint32Array && candidate.postings instanceof Uint32Array && candidate.geoKeys instanceof Uint32Array && candidate.geoLat instanceof Float64Array && candidate.geoLon instanceof Float64Array;
+}
 async function loadIndex() {
-  return await getSearch(INDEX) ?? null;
+  const stored = await getSearch(INDEX);
+  return isCurrentIndex(stored) ? stored : null;
+}
+async function hasCurrentIndex() {
+  return await loadIndex() !== null;
 }
 async function loadEmbeddings() {
   return await getSearch(EMBEDDINGS) ?? null;
@@ -1732,7 +1947,12 @@ async function boot(creds) {
       failFrom(error, creds);
   }
   wireSearch(creds, () => library, render);
-  const [remote, local] = await Promise.all([remoteSnapshot(creds), getSnapshot()]);
+  const [remote, marker, hasIndex] = await Promise.all([
+    remoteSnapshot(creds),
+    getSnapshot(),
+    hasCurrentIndex()
+  ]);
+  const local = hasIndex ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });

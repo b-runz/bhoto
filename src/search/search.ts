@@ -6,7 +6,7 @@
  * Every dependency is injected: this module has no network, no DOM and no
  * storage of its own, which is what makes the whole search path testable.
  */
-import { matchLabels, matchNames, matchOcr, pointsInBox } from "./local";
+import { matchTokens, pointsInBox } from "./local";
 import { containsPoint, matchesExactName } from "./nominatim";
 import { mergeSuggestions, pickPass, scoreLabels } from "./suggest";
 import type { SearchIndex } from "./local";
@@ -68,18 +68,19 @@ export async function runSearch(query: string, deps: SearchDeps): Promise<Set<st
   const placePass = within(placeMatches(trimmed, deps), timeout, new Set<string>());
   const translation = within(deps.translate(trimmed), timeout, null);
 
-  const found = new Set<string>();
-  for (const key of matchLabels(deps.index, trimmed)) found.add(key);
-  for (const key of matchOcr(deps.index, trimmed)) found.add(key);
-  for (const key of matchNames(deps.items, trimmed)) found.add(key);
+  // One pass over one inverted index covers every searchable column --
+  // labels, OCR text, filenames and camera text alike. There is no separate
+  // filename pass over the manifest any more: `name_normalized` is indexed
+  // like everything else.
+  const found = matchTokens(deps.index, trimmed);
 
-  // The translated term goes through the same exact match as the raw one.
-  // Deterministic: either it appears in a label or it does not. No OCR pass
-  // for it -- labels are a small curated vocabulary, OCR text is whatever
-  // language was photographed, and translating into it only adds noise.
+  // The translated term goes through the same token match as the raw one, and
+  // its hits are unioned in: a Danish label and an English one are both
+  // legitimate answers to the same query. Deterministic either way -- a token
+  // is in the index or it is not.
   const translated = await translation;
   if (translated !== null && translated !== "" && translated !== trimmed.toLowerCase()) {
-    for (const key of matchLabels(deps.index, translated)) found.add(key);
+    for (const key of matchTokens(deps.index, translated)) found.add(key);
   }
 
   for (const key of await placePass) found.add(key);

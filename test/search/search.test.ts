@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runSearch, suggestFor } from "../../src/search/search";
+import { INDEX_FORMAT } from "../../src/search/local";
 import type { SearchDeps } from "../../src/search/search";
 import type { SearchIndex } from "../../src/search/local";
 import type { NominatimPlace } from "../../src/search/nominatim";
@@ -10,21 +11,67 @@ const KEYS = [
   "2022/08/29/IMG_0001.jpg", // label "train", geotagged in the box
   "2022/08/29/IMG_0002.jpg", // OCR "danskebank"
   "2023/01/02/VID_0003.mp4", // label "tog rejse" only
-  "2024/06/07/IMG_0004.jpg", // nothing; not in the manifest either
+  "2024/06/07/IMG_0004.jpg", // in the index, gone from the manifest
 ];
 
-function index(): SearchIndex {
+/**
+ * Builds a {@link SearchIndex} from a map of key -> space-separated tokens.
+ * Same shape as the helper in `local.test.ts`: one inverted index over every
+ * column, so a test row's tokens are simply whatever text that asset carried,
+ * whether it came from a label, from OCR or from the filename.
+ */
+function indexFrom(rows: Record<string, string>): SearchIndex {
+  const keys = Object.keys(rows);
+  const postingsByTerm = new Map<string, number[]>();
+  keys.forEach((key, keyIndex) => {
+    for (const token of rows[key]!.split(" ").filter((t) => t !== "")) {
+      let list = postingsByTerm.get(token);
+      if (!list) {
+        list = [];
+        postingsByTerm.set(token, list);
+      }
+      if (list[list.length - 1] !== keyIndex) list.push(keyIndex);
+    }
+  });
+
+  const terms = [...postingsByTerm.keys()].sort();
+  const offsets = new Uint32Array(terms.length + 1);
+  const postings: number[] = [];
+  terms.forEach((term, t) => {
+    offsets[t] = postings.length;
+    for (const keyIndex of postingsByTerm.get(term)!) postings.push(keyIndex);
+  });
+  offsets[terms.length] = postings.length;
+
   return {
-    keys: [...KEYS],
-    labelTerms: ["tog rejse", "train"],
-    labelOffsets: new Uint32Array([0, 1, 2]),
-    labelPostings: new Uint32Array([2, 0]),
-    ocrKeys: new Uint32Array([1]),
-    ocrText: ["danskebank icu"],
-    geoKeys: new Uint32Array([0]),
-    geoLat: new Float64Array([56.15]),
-    geoLon: new Float64Array([10.21]),
+    format: INDEX_FORMAT,
+    keys,
+    terms,
+    offsets,
+    postings: new Uint32Array(postings),
+    geoKeys: new Uint32Array(0),
+    geoLat: new Float64Array(0),
+    geoLon: new Float64Array(0),
   };
+}
+
+/**
+ * The stock index. Tokens are the folded form of each asset's label, OCR text
+ * and filename, exactly as the import would have written them: `IMG_0001.jpg`
+ * folds to `img 0001 jpg`, so the filename is three ordinary tokens.
+ */
+function index(): SearchIndex {
+  const built = indexFrom({
+    [KEYS[0]!]: "train img 0001 jpg",
+    [KEYS[1]!]: "danskebank icu img 0002 jpg",
+    [KEYS[2]!]: "tog rejse vid 0003 mp4",
+    [KEYS[3]!]: "orphan img 0004 jpg",
+  });
+  // Only IMG_0001 is geotagged, inside the Aarhus box below.
+  built.geoKeys = new Uint32Array([0]);
+  built.geoLat = new Float64Array([56.15]);
+  built.geoLon = new Float64Array([10.21]);
+  return built;
 }
 
 /** The manifest deliberately lacks IMG_0004: it is in the index but gone. */
@@ -61,14 +108,24 @@ function deps(over: Partial<SearchDeps> = {}): SearchDeps {
 }
 
 describe("runSearch", () => {
-  test("matches labels, OCR and filenames in one pass", async () => {
+  test("matches a token from any column through the one index", async () => {
     expect(await runSearch("train", deps())).toEqual(new Set([KEYS[0]!]));
     expect(await runSearch("danskebank", deps())).toEqual(new Set([KEYS[1]!]));
+    // The filename pass is gone: `VID_0003` folds to `vid 0003` and both
+    // tokens are in the index, so the AND still lands on the video.
     expect(await runSearch("VID_0003", deps())).toEqual(new Set([KEYS[2]!]));
   });
 
+  test("requires every token of the query, as FTS5 does", async () => {
+    expect(await runSearch("train danskebank", deps())).toEqual(new Set());
+  });
+
+  test("returns nothing for a token no asset carries", async () => {
+    expect(await runSearch("submarine", deps())).toEqual(new Set());
+  });
+
   test("uses the translation to reach a label in the other language", async () => {
-    const translate = async (q: string) => (q === "train" ? "tog rejse" : null);
+    const translate = async (q: string) => (q === "train" ? "tog" : null);
     // "train" hits the English label directly AND, once translated, the
     // Danish one. Both are kept.
     expect(await runSearch("train", deps({ translate }))).toEqual(
@@ -84,6 +141,12 @@ describe("runSearch", () => {
     };
     await runSearch("train", deps({ translate }));
     expect(calls).toBe(1);
+  });
+
+  test("ignores an empty translation", async () => {
+    expect(await runSearch("train", deps({ translate: async () => "" }))).toEqual(
+      new Set([KEYS[0]!]),
+    );
   });
 
   test("adds geotagged assets for an exactly-named place", async () => {
@@ -134,11 +197,7 @@ describe("runSearch", () => {
 
   test("drops keys the manifest no longer holds", async () => {
     // IMG_0004 is in the index's key table but not in the bucket listing.
-    const withOrphan = index();
-    withOrphan.labelTerms = ["orphan"];
-    withOrphan.labelOffsets = new Uint32Array([0, 1]);
-    withOrphan.labelPostings = new Uint32Array([3]);
-    expect(await runSearch("orphan", deps({ index: withOrphan }))).toEqual(new Set());
+    expect(await runSearch("orphan", deps())).toEqual(new Set());
   });
 
   test("returns nothing for an empty query without touching the network", async () => {

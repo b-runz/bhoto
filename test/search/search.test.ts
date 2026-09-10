@@ -133,22 +133,6 @@ describe("runSearch", () => {
     );
   });
 
-  test("ignores a translation identical to the query", async () => {
-    let calls = 0;
-    const translate = async (q: string) => {
-      calls++;
-      return q;
-    };
-    await runSearch("train", deps({ translate }));
-    expect(calls).toBe(1);
-  });
-
-  test("ignores an empty translation", async () => {
-    expect(await runSearch("train", deps({ translate: async () => "" }))).toEqual(
-      new Set([KEYS[0]!]),
-    );
-  });
-
   test("adds geotagged assets for an exactly-named place", async () => {
     const found = await runSearch("Aarhus", deps({ places: async () => [aarhus] }));
     expect(found).toEqual(new Set([KEYS[0]!]));

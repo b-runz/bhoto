@@ -1750,9 +1750,6 @@ async function loadIndex() {
   const stored = await getSearch(INDEX);
   return isCurrentIndex(stored) ? stored : null;
 }
-async function hasCurrentIndex() {
-  return await loadIndex() !== null;
-}
 async function loadEmbeddings() {
   return await getSearch(EMBEDDINGS) ?? null;
 }
@@ -1859,7 +1856,7 @@ async function boot(creds) {
     scroller,
     creds,
     meta,
-    onOpen: (index) => lightbox.show(index),
+    onOpen: (index2) => lightbox.show(index2),
     onSelectionChange: (count) => {
       el("selbar").hidden = count === 0;
       el("selbar-count").textContent = `${count} selected`;
@@ -1946,13 +1943,13 @@ async function boot(creds) {
     else
       failFrom(error, creds);
   }
-  wireSearch(creds, () => library, render);
-  const [remote, marker, hasIndex] = await Promise.all([
+  const searchIndex = wireSearch(creds, () => library, render);
+  const [remote, marker, index] = await Promise.all([
     remoteSnapshot(creds),
     getSnapshot(),
-    hasCurrentIndex()
+    searchIndex
   ]);
-  const local = hasIndex ? marker : null;
+  const local = index !== null ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });
@@ -2009,9 +2006,10 @@ function wireSearch(creds, getItems, render) {
   const summary = el("search-summary");
   const chips = el("search-chips");
   let index = null;
-  loadIndex().then((loaded) => {
+  const loading = loadIndex().then((loaded) => {
     index = loaded;
     form.hidden = loaded === null;
+    return loaded;
   });
   form.hidden = true;
   const showChips = (suggestions) => {
@@ -2083,6 +2081,7 @@ function wireSearch(creds, getItems, render) {
       showChips([]);
     }
   };
+  return loading;
 }
 function changed(a, b) {
   if (a.length !== b.length)

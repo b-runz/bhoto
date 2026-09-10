@@ -29,6 +29,8 @@
     const keyIndex = new Map;
     for (const row of rows(db, `SELECT remote_key FROM gallery_asset WHERE ${RENDERABLE} ORDER BY remote_key`)) {
       const key = String(row[0]);
+      if (keyIndex.has(key))
+        continue;
       keyIndex.set(key, keys.length);
       keys.push(key);
     }

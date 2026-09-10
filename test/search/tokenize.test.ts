@@ -74,4 +74,14 @@ describe("fold", () => {
     expect(normalize("Ærø")).toBe("ærø");
     expect(fold("Ærø")).toBe("aero");
   });
+
+  test("normalize over-folds where unicode61 keeps the letter", () => {
+    // Pins the known imprecision in normalize's emulation of `unicode61
+    // remove_diacritics 1`: NFD plus stripping every \p{M} also removes the
+    // marks unicode61 keeps on multi-diacritic Latin, so the phone's index
+    // holds `ế` where the viewer's holds `e`. fold, which is the phone's own
+    // table, leaves it alone. Documented, not fixed.
+    expect(normalize("ế")).toBe("e");
+    expect(fold("ế")).toBe("ế");
+  });
 });

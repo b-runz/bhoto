@@ -13,7 +13,7 @@ import { presignGet } from "./sigv4";
 import { embedQuery, clearGoogleCaches, translateQuery } from "./search/google";
 import { searchNominatim } from "./search/nominatim";
 import { runSearch, suggestFor } from "./search/search";
-import { getSnapshot, hasCurrentIndex, loadApiKey, loadEmbeddings, loadIndex, saveImport } from "./search/store";
+import { getSnapshot, loadApiKey, loadEmbeddings, loadIndex, saveImport } from "./search/store";
 import type { SearchDeps } from "./search/search";
 import type { SearchIndex } from "./search/local";
 import type { ImportResult } from "./search/import";
@@ -255,19 +255,22 @@ async function boot(creds: Creds): Promise<void> {
     else failFrom(error, creds);
   }
 
-  wireSearch(creds, () => library, render);
+  // The one index read of the page: the search box needs it to decide
+  // whether to show itself, and the boot sequence needs to know whether one
+  // exists. Reusing the promise keeps that to a single deserialization.
+  const searchIndex = wireSearch(creds, () => library, render);
 
   // A stored `lastModified` with no searchable index behind it -- the
   // pre-migration index format, or a record lost while the snapshot marker
   // survived -- counts as nothing stored. Without this the unchanged remote
   // `lastModified` would equal the stale local one and the re-import the new
   // format needs would never fire.
-  const [remote, marker, hasIndex] = await Promise.all([
+  const [remote, marker, index] = await Promise.all([
     remoteSnapshot(creds),
     getSnapshot(),
-    hasCurrentIndex(),
+    searchIndex,
   ]);
-  const local = hasIndex ? marker : null;
+  const local = index !== null ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });
@@ -338,12 +341,16 @@ function importSnapshot(url: string, onProgress: (loaded: number, total: number)
  * The search box. Fires on Enter only -- matching the reference app, and
  * keeping Nominatim to one request per deliberate search, comfortably inside
  * their fair-use policy.
+ *
+ * Returns the one `loadIndex()` this page performs, so the boot sequence can
+ * decide whether an import is needed off the same read rather than
+ * deserializing the whole index a second time.
  */
 function wireSearch(
   creds: Creds,
   getItems: () => Item[],
   render: (items: Item[]) => void,
-): void {
+): Promise<SearchIndex | null> {
   const form = el<HTMLFormElement>("search-form");
   const input = el<HTMLInputElement>("search-input");
   const clear = el<HTMLButtonElement>("search-clear");
@@ -351,9 +358,10 @@ function wireSearch(
   const chips = el("search-chips");
 
   let index: SearchIndex | null = null;
-  void loadIndex().then((loaded) => {
+  const loading = loadIndex().then((loaded) => {
     index = loaded;
     form.hidden = loaded === null;
+    return loaded;
   });
   form.hidden = true;
 
@@ -439,6 +447,8 @@ function wireSearch(
       showChips([]);
     }
   };
+
+  return loading;
 }
 
 /** Cheap comparison: count plus a key-order digest. */

@@ -1,10 +1,21 @@
 /**
  * Two folding functions, for two different sides of the same search.
  *
- * `normalize` matches SQLite FTS5's `unicode61` tokenizer with its default
- * `remove_diacritics 1` (NFD-decompose, strip combining marks, lowercase,
- * split on non-alphanumerics): it exists so this module can reason about how
- * the phone's FTS5 index actually tokenized the text it indexed.
+ * `normalize` approximates SQLite FTS5's `unicode61` tokenizer with its
+ * default `remove_diacritics 1` (NFD-decompose, strip combining marks,
+ * lowercase, split on non-alphanumerics): it exists so this module can reason
+ * about how the phone's FTS5 index actually tokenized the text it indexed.
+ *
+ * The emulation is exact for ASCII and for single-diacritic Latin
+ * precomposed forms, which is what `remove_diacritics 1` is specified to
+ * handle. It over-folds everything else, because stripping every `\p{M}`
+ * after NFD removes marks `unicode61` keeps: multi-diacritic Latin
+ * (Vietnamese `ế` -> `e`, `ǻ`, `ṩ`), Cyrillic (`й` -> `и`, `ё` -> `е`) and
+ * Greek tonos (`ή` -> `η`). For such text the phone's index holds the
+ * unfolded token and the viewer's holds the folded one, so the phone matches
+ * and the viewer returns nothing -- the mirror image of the `Ærø` asymmetry
+ * documented below, and left in place for the same reason: this module
+ * reproduces the phone's behaviour rather than correcting it.
  *
  * `fold` is a verbatim port of the phone's `foldForSearch`
  * (`lib/infrastructure/db/text_folding.dart`), which folds the user's typed

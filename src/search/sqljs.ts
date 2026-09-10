@@ -1,6 +1,6 @@
 /**
  * The slice of sql.js this project uses. The package ships no types, and
- * pulling @types/sql.js would add a dependency for four method signatures.
+ * pulling @types/sql.js would add a dependency for six method signatures.
  *
  * sql.js is reached as a global: the worker calls `importScripts` on the
  * vendored UMD bundle, which defines `initSqlJs` on `self`.

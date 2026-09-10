@@ -308,13 +308,18 @@ CREATE TABLE store_entity (
 
 # Verbatim from lib/infrastructure/db/gallery_fts.dart. Created before any
 # row is inserted, so the AFTER INSERT trigger fills the index for real.
-FTS_SCHEMA = """
+FTS_VTAB_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS gallery_fts USING fts5(
     name_normalized, label_text, ocr_text, camera_text,
     content = 'gallery_asset', content_rowid = 'rowid',
     tokenize = 'unicode61', prefix = '2 3'
 );
+"""
 
+# Kept apart from the vtab above so the "no FTS5" bail-out below can only
+# ever fire on the CREATE VIRTUAL TABLE. Folded together, a plain syntax
+# error in a trigger would be reported as a missing FTS5 module.
+FTS_TRIGGER_SCHEMA = """
 CREATE TRIGGER IF NOT EXISTS gallery_fts_ai AFTER INSERT ON gallery_asset BEGIN
   INSERT INTO gallery_fts(rowid, name_normalized, label_text, ocr_text, camera_text)
   VALUES (new.rowid, new.name_normalized, new.label_text, new.ocr_text, new.camera_text);
@@ -664,12 +669,14 @@ def build(dest: Path) -> None:
     # FTS5 is a compile-time option. Bail loudly rather than commit a fixture
     # that silently lacks the virtual table the sqljs test exists to prove.
     try:
-        db.executescript(FTS_SCHEMA)
+        db.executescript(FTS_VTAB_SCHEMA)
     except sqlite3.OperationalError as error:
         sys.exit(
             f"this Python's SQLite {sqlite3.sqlite_version} cannot create the FTS5 table"
             f" ({error}); the fixture would be missing gallery_fts, so refusing to write it"
         )
+
+    db.executescript(FTS_TRIGGER_SCHEMA)
 
     for asset in ASSETS:
         insert_asset(db, asset)
@@ -694,9 +701,20 @@ def build(dest: Path) -> None:
 
     db.commit()
 
-    indexed = db.execute("SELECT COUNT(*) FROM gallery_fts").fetchone()[0]
+    # Query through the index, not COUNT(*). gallery_fts is an external-
+    # content table: a bare COUNT(*) reads gallery_asset and returns 8
+    # whether or not a single posting was ever written. A MATCH has to walk
+    # the index itself, so it is zero when the triggers did not fire. Every
+    # fixture row's name_normalized ends in `jpg`, so a correct index has
+    # exactly one hit per asset.
+    indexed = db.execute(
+        "SELECT COUNT(*) FROM gallery_fts WHERE gallery_fts MATCH 'jpg'"
+    ).fetchone()[0]
     if indexed != ASSET_COUNT:
-        sys.exit(f"gallery_fts holds {indexed} rows, expected {ASSET_COUNT} -- triggers did not fire")
+        sys.exit(
+            f"gallery_fts matched {indexed} rows for 'jpg', expected {ASSET_COUNT}"
+            " -- triggers did not fire"
+        )
 
     db.execute("VACUUM")
     db.commit()

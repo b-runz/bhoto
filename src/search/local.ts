@@ -7,7 +7,7 @@
  * per token followed by an intersection. This reproduces a bare SQLite
  * FTS5 `MATCH` over multiple columns -- implicit AND between tokens, no
  * prefix matching, no substring matching, and no awareness of which column a
- * token came from. See the "One inverted index" section of
+ * token came from. See the "Index shape" section of
  * `docs/superpowers/specs/2026-09-09-unified-model-migration-design.md` for
  * why the four-matcher design this replaces doesn't reflect what FTS5
  * actually does.

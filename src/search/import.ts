@@ -3,13 +3,15 @@
  * index. Runs once per new snapshot, inside a Worker.
  *
  * Every statement filters `gallery_asset` on `remote_key <> '' AND
- * visibility = 0`. That filter is not decoration: it is the phone's own
- * filter for both `search` and `byLocation`, and much of the table belongs
- * to photos this app cannot render -- phone-local rows have no S3 key at
- * all, and archived, hidden and locked rows are not searchable even when
- * their objects are in the bucket. Without it the index would carry entries
- * nothing can ever display. There is no `deleted_at` in this schema: a
- * deleted photo has no row.
+ * visibility = 0`. That filter is not decoration, and its two halves have
+ * different justifications. `visibility = 0` is the phone's own filter, in
+ * both `search` and `byLocation`: archived, hidden and locked rows are not
+ * searchable even when their objects are in the bucket. `remote_key <> ''`
+ * is this viewer's addition -- the phone's `search` does not filter on it,
+ * because the phone can show a photo that lives only on the device, and this
+ * app cannot render one with no S3 object behind it. Without both, the index
+ * would carry entries nothing can ever display. There is no `deleted_at` in
+ * this schema: a deleted photo has no row.
  *
  * Text goes through `normalize()`, never `fold()`. The two exist for the two
  * sides of the same search: the phone indexed its columns through FTS5's
@@ -17,8 +19,14 @@
  * user's *query* with `foldForSearch`, which `fold` ports. They agree on
  * ASCII and disagree on letters with no decomposition, so using `fold` here
  * would index `ærø` as `aero` and quietly break parity with the phone in
- * the other direction. Applying `normalize` to columns the phone already
- * folded is exact: `unicode61` on folded ASCII is the identity split.
+ * the other direction.
+ *
+ * Applying `normalize` to columns the phone already folded is exact for
+ * ASCII and for single-diacritic Latin -- `unicode61` on folded ASCII is the
+ * identity split. It is not exact for multi-diacritic Latin (`ế`), Cyrillic
+ * (`й`, `ё`) or Greek tonos (`ή`), which `normalize` over-folds relative to
+ * `unicode61 remove_diacritics 1`; see the `normalize` doc comment in
+ * `./tokenize` for what that costs.
  */
 import { normalize } from "./tokenize";
 import { EMBEDDING_MODEL } from "./suggest";
@@ -30,7 +38,7 @@ import type { SqlDatabase, SqlValue } from "./sqljs";
 /** Vectors are Float32 in the DB; 3072 bytes is 768 dimensions. */
 const DIMENSIONS = 768;
 
-/** The phone's filter for a photo this viewer can render and search. */
+/** A photo this viewer can render and search: see the module comment. */
 const RENDERABLE = "remote_key <> '' AND visibility = 0";
 
 export interface ImportResult {
@@ -53,8 +61,9 @@ function rows(db: SqlDatabase, sql: string): SqlValue[][] {
 
 export function buildIndex(db: SqlDatabase): ImportResult {
   // ---- keys -------------------------------------------------------------
-  // SQLite's default BINARY collation is byte order, which agrees with the
-  // code-unit order matchTokens' binary search over `keys` assumes.
+  // `ORDER BY remote_key` buys nothing at search time -- nothing binary-
+  // searches `keys` -- and exists only so the array comes out in a
+  // deterministic order the fixture tests can assert.
   const keys: string[] = [];
   const keyIndex = new Map<string, number>();
   for (const row of rows(
@@ -62,6 +71,10 @@ export function buildIndex(db: SqlDatabase): ImportResult {
     `SELECT remote_key FROM gallery_asset WHERE ${RENDERABLE} ORDER BY remote_key`,
   )) {
     const key = String(row[0]);
+    // `remote_key` is indexed but not unique; a duplicate would be a
+    // phone-side anomaly, and keeping the first occurrence is what stops it
+    // from putting the same key in `keys` twice.
+    if (keyIndex.has(key)) continue;
     keyIndex.set(key, keys.length);
     keys.push(key);
   }

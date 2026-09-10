@@ -65,21 +65,19 @@ export function isCurrentIndex(value: unknown): value is SearchIndex {
   );
 }
 
-/** The stored index, or null when there is none this build can search. */
+/**
+ * The stored index, or null when there is none this build can search.
+ *
+ * The boot sequence pairs this with {@link getSnapshot}: a stored
+ * `lastModified` with no index behind it -- which is what an upgrade across
+ * the index format looks like -- has to count as nothing stored, or the
+ * unchanged `lastModified` would suppress the re-import forever. Boot and the
+ * search box share one call, because deserializing about 1 MB of typed arrays
+ * twice at startup buys nothing.
+ */
 export async function loadIndex(): Promise<SearchIndex | null> {
   const stored = await getSearch<unknown>(INDEX);
   return isCurrentIndex(stored) ? stored : null;
-}
-
-/**
- * Whether search has a usable index already. The boot sequence pairs this
- * with {@link getSnapshot}: a stored `lastModified` with no index behind it
- * -- which is what an upgrade across the index format looks like -- has to
- * count as nothing stored, or the unchanged `lastModified` would suppress the
- * re-import forever.
- */
-export async function hasCurrentIndex(): Promise<boolean> {
-  return (await loadIndex()) !== null;
 }
 
 export async function loadEmbeddings(): Promise<Embeddings | null> {

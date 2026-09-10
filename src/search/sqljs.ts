@@ -18,6 +18,8 @@ export interface SqlStatement {
 
 export interface SqlDatabase {
   prepare(sql: string): SqlStatement;
+  /** Executes a statement that returns no rows. Used by tests, not by the import. */
+  run(sql: string): void;
   close(): void;
 }
 

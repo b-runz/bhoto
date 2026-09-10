@@ -1,44 +1,68 @@
 import { describe, expect, test } from "bun:test";
 import initSqlJs from "sql.js";
+import type { SqlDatabase } from "../../src/search/sqljs";
+
+async function open(): Promise<SqlDatabase> {
+  const SQL = await initSqlJs();
+  const bytes = new Uint8Array(await Bun.file("test/fixtures/search.db").arrayBuffer());
+  return new SQL.Database(bytes);
+}
 
 /**
  * Proves the vendored build can read this project's actual schema before any
- * extraction logic depends on it: WITHOUT ROWID tables (stored as index
- * b-trees), STRICT tables, and 3 KB blobs that spill into overflow pages.
+ * extraction logic depends on it. The fixture is not a plain set of tables:
+ * `tools/make_search_fixture.py` creates `gallery_fts`, an FTS5 virtual
+ * table, and the three triggers that keep it in sync, exactly as the phone
+ * does. If sql.js were built without FTS5 the schema would still parse, but
+ * a build that chokes on the vtab or the triggers would fail here rather
+ * than inside the Worker.
  */
 describe("sql.js against the fixture", () => {
-  test("opens the fixture and reads all three awkward shapes", async () => {
-    const SQL = await initSqlJs();
-    const bytes = new Uint8Array(await Bun.file("test/fixtures/search.db").arrayBuffer());
-    const db = new SQL.Database(bytes);
+  test("opens a database carrying an FTS5 virtual table and its triggers", async () => {
+    const db = await open();
 
-    // WITHOUT ROWID + STRICT.
-    const assets = db.prepare("SELECT id FROM remote_asset_entity");
-    let assetCount = 0;
-    while (assets.step()) assetCount++;
-    assets.free();
-    expect(assetCount).toBeGreaterThan(0);
+    // The count the script documents: six renderable rows plus the
+    // local-only and archived ones.
+    const count = db.prepare("SELECT COUNT(*) FROM gallery_asset");
+    expect(count.step()).toBe(true);
+    expect(Number(count.get()[0])).toBe(8);
+    count.free();
 
-    // A blob big enough to overflow a 4 KB page.
-    const blob = db.prepare("SELECT embedding FROM label_embedding_entity LIMIT 1");
+    // Both halves of the FTS machinery are really in the file.
+    const objects = db.prepare(
+      "SELECT type FROM sqlite_master WHERE name = 'gallery_fts'" +
+        " OR name LIKE 'gallery_fts_a%' ORDER BY name",
+    );
+    const kinds: string[] = [];
+    while (objects.step()) kinds.push(String(objects.get()[0]));
+    objects.free();
+    expect(kinds).toEqual(["table", "trigger", "trigger", "trigger"]);
+
+    db.close();
+  });
+
+  test("reads a 3 KB embedding blob out of an overflow page", async () => {
+    const db = await open();
+    const blob = db.prepare("SELECT embedding FROM label_embedding LIMIT 1");
     expect(blob.step()).toBe(true);
     const value = blob.get()[0];
     expect(value).toBeInstanceOf(Uint8Array);
     expect((value as Uint8Array).length).toBe(3072);
     blob.free();
+    db.close();
+  });
 
-    // The FTS shadow table, read as an ordinary table -- no FTS5 needed.
-    const ocr = db.prepare("SELECT c0, c1 FROM asset_fts_content LIMIT 1");
-    expect(ocr.step()).toBe(true);
-    ocr.free();
-
+  test("run() executes a statement that returns no rows", async () => {
+    const db = await open();
+    db.run("DROP TABLE store_entity");
+    const gone = db.prepare("SELECT name FROM sqlite_master WHERE name = 'store_entity'");
+    expect(gone.step()).toBe(false);
+    gone.free();
     db.close();
   });
 
   test("the committed fixture carries no real API key", async () => {
-    const SQL = await initSqlJs();
-    const bytes = new Uint8Array(await Bun.file("test/fixtures/search.db").arrayBuffer());
-    const db = new SQL.Database(bytes);
+    const db = await open();
     const stmt = db.prepare("SELECT string_value FROM store_entity WHERE id = 2002");
     expect(stmt.step()).toBe(true);
     expect(String(stmt.get()[0])).toContain("FIXTURE");

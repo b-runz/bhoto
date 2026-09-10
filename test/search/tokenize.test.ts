@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { normalize } from "../../src/search/tokenize";
+import { fold, normalize } from "../../src/search/tokenize";
 
 describe("normalize", () => {
   test("folds case and splits on punctuation", () => {
@@ -35,5 +35,43 @@ describe("normalize", () => {
     expect(normalize("")).toBe("");
     expect(normalize("   ")).toBe("");
     expect(normalize("!!! ???")).toBe("");
+  });
+});
+
+describe("fold", () => {
+  test("strips diacritics and ligatures via the lookup table", () => {
+    expect(fold("Ærø")).toBe("aero");
+    expect(fold("Straße")).toBe("strasse");
+    expect(fold("Łódź")).toBe("lodz");
+    expect(fold("İstanbul")).toBe("istanbul");
+  });
+
+  test("splits on punctuation and lowercases", () => {
+    expect(fold("IMG_4821.jpg")).toBe("img 4821 jpg");
+    expect(fold("Café-Nord!")).toBe("cafe nord");
+  });
+
+  test("preserves scripts that are not in the Latin diacritic table", () => {
+    expect(fold("Москва")).toBe("москва");
+    expect(fold("日本語")).toBe("日本語");
+  });
+
+  test("drops characters that are numeric but not \\p{Nd}, unlike normalize's \\p{N}", () => {
+    expect(fold("m²")).toBe("m");
+  });
+
+  test("collapses whitespace and trims the edges", () => {
+    expect(fold("  x  ")).toBe("x");
+  });
+
+  test("returns an empty string for empty input", () => {
+    expect(fold("")).toBe("");
+  });
+
+  test("differs from normalize on letters unicode61 does not decompose", () => {
+    // ø and æ carry no combining mark, so unicode61 (normalize) keeps them
+    // as-is, but the phone's lookup table (fold) strips them regardless.
+    expect(normalize("Ærø")).toBe("ærø");
+    expect(fold("Ærø")).toBe("aero");
   });
 });

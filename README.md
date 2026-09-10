@@ -64,8 +64,8 @@ The status file is written by the phone after every push, and once by the
 script that migrates an existing bucket to this schema. It is checked on
 every load; the viewer re-imports when `lastModified` has changed, or when it
 has no usable index at all, which is what upgrading across an index format
-looks like. The 19 MB snapshot is downloaded only when a re-import is
-needed, imported in a Worker, and distilled into about 11.5 MB of IndexedDB.
+looks like. The snapshot is downloaded only when a re-import is needed,
+imported in a Worker, and distilled into a much smaller index in IndexedDB.
 Searching afterwards is local and synchronous.
 
 The bucket's snapshot has to be at this schema for search to work at all.

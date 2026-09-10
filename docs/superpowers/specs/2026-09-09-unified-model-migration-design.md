@@ -60,8 +60,10 @@ In `GallerySyncService.push()`, after `uploadFileGzipped` returns, put
 ```
 
 `lastModified` is the current time in epoch milliseconds. Nothing else is in
-the body. The old file's `assetCount` fed a shrink guard that no longer exists;
-the migration script writes the same single-field shape.
+the body of the phone's write. The old file's `assetCount` fed a shrink guard
+that no longer exists; the migration script and the PC importer still include
+`assetCount` alongside `lastModified`, and the viewer ignores it. Only the
+phone writes `lastModified` on its own.
 
 The write is part of push, not a separate step, so the ordering is: checkpoint,
 upload database, write status, clear dirty. A status write that throws
@@ -110,9 +112,13 @@ There is no `deleted_at`. A deleted photo has no row.
 
 ### Renderable rows
 
-A row is indexed when `remote_key <> ''` and `visibility = 0`. This is the
-phone's own filter for both `search` and `byLocation`. Archived, hidden and
-locked photos are not searchable even if their objects are in the bucket. The
+A row is indexed when `remote_key <> ''` and `visibility = 0`. The
+`visibility = 0` half is the phone's own filter, in both `search` and
+`byLocation`: archived, hidden and locked photos are not searchable even if
+their objects are in the bucket. The `remote_key <> ''` half is the viewer's
+addition — the phone's `search` does not filter on it, because the phone can
+show a photo that only exists on the device, and this viewer cannot render
+one with no S3 object behind it. The
 manifest intersection at the end of every search stays: it is what removes
 keys the bucket no longer holds.
 
@@ -185,7 +191,13 @@ them. Parity with the phone therefore needs both:
 - **Index side:** the existing `normalize()` in `tokenize.ts`, which emulates
   `unicode61` with `remove_diacritics 1`. Applied to every column, including
   the ones the phone already folded. `unicode61` on folded ASCII is the
-  identity split, so this is exact.
+  identity split, so this is exact for ASCII and for single-diacritic Latin
+  precomposed forms. It is *not* exact beyond that: `normalize` decomposes
+  with NFD and strips every combining mark, which over-folds where
+  `remove_diacritics 1` keeps the letter — multi-diacritic Latin (`ế`→`e`,
+  `ǻ`, `ṩ`), Cyrillic (`й`→`и`, `ё`→`е`) and Greek tonos (`ή`→`η`). For such
+  text the phone matches and the viewer returns nothing. This is the mirror
+  image of the `Ærø` asymmetry below and is inherited, not fixed.
 - **Query side:** a new `fold()` in `tokenize.ts`, a verbatim port of
   `foldForSearch`: the same character table, `\p{L}` and `\p{Nd}` as the
   token classes, runs of anything else become one space, then trim. The table

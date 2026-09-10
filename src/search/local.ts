@@ -1,27 +1,36 @@
 /**
  * The distilled search index and the matching that runs against it.
  *
+ * One inverted index covers every column the phone used to search
+ * separately (labels, OCR text, filenames): each row's text is folded into
+ * tokens and every token gets one posting list, so a query is just a lookup
+ * per token followed by an intersection. This reproduces a bare SQLite
+ * FTS5 `MATCH` over multiple columns -- implicit AND between tokens, no
+ * prefix matching, no substring matching, and no awareness of which column a
+ * token came from. See the "One inverted index" section of
+ * `docs/superpowers/specs/2026-09-09-unified-model-migration-design.md` for
+ * why the four-matcher design this replaces doesn't reflect what FTS5
+ * actually does.
+ *
  * Everything here is synchronous and allocation-light: a search runs on the
  * main thread between a keypress and the next paint, over a few thousand
- * terms. All four matchers return S3 keys, which are also the manifest's
- * keys -- the index positions the postings use never escape this module.
+ * terms.
  */
-import { normalize } from "./tokenize";
-import type { Item } from "../types";
+import { fold } from "./tokenize";
+
+export const INDEX_FORMAT = 2;
 
 export interface SearchIndex {
+  /** Format version of a persisted index; equals {@link INDEX_FORMAT}. */
+  format: number;
   /** Asset keys. Postings index into this. */
   keys: string[];
-  /** Distinct lowercased labels, one entry per posting list. */
-  labelTerms: string[];
-  /** `labelTerms.length + 1` entries; list `t` spans `[offsets[t], offsets[t+1])`. */
-  labelOffsets: Uint32Array;
-  /** Indices into `keys`, grouped by term. */
-  labelPostings: Uint32Array;
-  /** Indices into `keys`, parallel to `ocrText`. */
-  ocrKeys: Uint32Array;
-  /** Normalized token strings, parallel to `ocrKeys`. */
-  ocrText: string[];
+  /** Distinct folded tokens across every searchable column, sorted. */
+  terms: string[];
+  /** `terms.length + 1` entries; term `t`'s postings span `[offsets[t], offsets[t+1])`. */
+  offsets: Uint32Array;
+  /** Indices into `keys`, grouped by term, ascending within a term. */
+  postings: Uint32Array;
   /** Indices into `keys`, parallel to `geoLat` and `geoLon`. */
   geoKeys: Uint32Array;
   geoLat: Float64Array;
@@ -35,67 +44,77 @@ export interface GeoPoint {
 }
 
 /**
- * Assets carrying a label that contains [term] as a whole word.
- *
- * Padding both the label and the term with spaces and asking for a substring
- * is the SQL `' ' || LOWER(label) || ' ' LIKE '% term %'` trick: labels are
- * space-delimited phrases, so this matches "passenger train" for "train"
- * while refusing to match inside "strainer".
+ * Binary-searches the sorted `terms` array for `term`, returning its index
+ * or -1 if absent.
  */
-export function matchLabels(index: SearchIndex, term: string): Set<string> {
-  const out = new Set<string>();
-  const trimmed = term.trim().toLowerCase();
-  if (trimmed === "") return out;
-
-  const needle = ` ${trimmed} `;
-  for (let t = 0; t < index.labelTerms.length; t++) {
-    if (!` ${index.labelTerms[t]!} `.includes(needle)) continue;
-    const start = index.labelOffsets[t]!;
-    const end = index.labelOffsets[t + 1]!;
-    for (let p = start; p < end; p++) out.add(index.keys[index.labelPostings[p]!]!);
+function findTerm(terms: string[], term: string): number {
+  let lo = 0;
+  let hi = terms.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const candidate = terms[mid]!;
+    if (candidate === term) return mid;
+    if (candidate < term) lo = mid + 1;
+    else hi = mid - 1;
   }
-  return out;
+  return -1;
 }
 
 /**
- * Assets whose OCR text contains [query] as an adjacent run of tokens.
+ * Assets matching every token in [query], reproducing a bare FTS5 `MATCH`
+ * with its implicit AND across tokens and no prefix or substring matching.
  *
- * This is FTS5's `MATCH "phrase"` reproduced without FTS5. Both sides are
- * normalized to space-separated tokens, so a padded substring test is exactly
- * phrase matching: "cats sat" hits, "the sat" does not, and "cat" does not
- * prefix-match "cats". Characters that would be FTS5 query syntax are just
- * separators here, so a query containing them degrades to no matches instead
- * of throwing a syntax error.
- */
-export function matchOcr(index: SearchIndex, query: string): Set<string> {
-  const out = new Set<string>();
-  const phrase = normalize(query);
-  if (phrase === "") return out;
-
-  const needle = ` ${phrase} `;
-  for (let i = 0; i < index.ocrText.length; i++) {
-    if (` ${index.ocrText[i]!} `.includes(needle)) out.add(index.keys[index.ocrKeys[i]!]!);
-  }
-  return out;
-}
-
-/**
- * Assets whose filename contains [query].
+ * The query is folded with {@link fold} -- the phone's query folding, not
+ * `normalize` -- then split on spaces. Each token is binary-searched in the
+ * sorted `terms` array; any token absent from the index makes the whole
+ * query empty without touching a single posting list. Otherwise the
+ * matching tokens' posting lists are intersected, smallest first, so a rare
+ * token prunes the search before a common one is ever scanned.
  *
- * Reads the manifest rather than the index: the manifest already holds every
- * key, and it is authoritative about what can actually be rendered. Only the
- * name is searched -- matching the path would make every query for a year
- * return that whole year.
+ * Posting lists are ascending within a term, which would allow a
+ * merge-style (two-pointer) intersection, but at the scale this runs at
+ * (a few thousand terms, a keypress-to-paint budget) a plain `Set`
+ * intersection is simpler to read and just as fast, so that's what this
+ * does.
  */
-export function matchNames(items: Item[], query: string): Set<string> {
-  const out = new Set<string>();
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return out;
+export function matchTokens(index: SearchIndex, query: string): Set<string> {
+  const folded = fold(query);
+  if (folded === "") return new Set();
 
-  for (const item of items) {
-    const name = item.key.slice(item.key.lastIndexOf("/") + 1);
-    if (name.toLowerCase().includes(needle)) out.add(item.key);
+  const tokens = folded.split(" ");
+  const termIndices: number[] = [];
+  for (const token of tokens) {
+    const t = findTerm(index.terms, token);
+    if (t === -1) return new Set();
+    termIndices.push(t);
   }
+
+  // Intersect smallest posting list first, so a rare token prunes early.
+  termIndices.sort(
+    (a, b) =>
+      index.offsets[a + 1]! - index.offsets[a]! - (index.offsets[b + 1]! - index.offsets[b]!),
+  );
+
+  let result: Set<number> | null = null;
+  for (const t of termIndices) {
+    const start = index.offsets[t]!;
+    const end = index.offsets[t + 1]!;
+    if (result === null) {
+      result = new Set();
+      for (let p = start; p < end; p++) result.add(index.postings[p]!);
+      continue;
+    }
+    const next = new Set<number>();
+    for (let p = start; p < end; p++) {
+      const posting = index.postings[p]!;
+      if (result.has(posting)) next.add(posting);
+    }
+    result = next;
+    if (result.size === 0) break;
+  }
+
+  const out = new Set<string>();
+  if (result !== null) for (const keyIndex of result) out.add(index.keys[keyIndex]!);
   return out;
 }
 

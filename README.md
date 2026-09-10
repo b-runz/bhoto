@@ -41,8 +41,18 @@ an `<img>`. The extension is read in exactly one place: choosing `<img>` or
 
 ## Search
 
-Search matches filenames, OCR text, ML labels and place names. It reads a
-metadata snapshot the phone app pushes to the bucket:
+Search matches filenames, ML labels, OCR text, camera make and model, and
+place names. Outside place names, matching is by whole token: the query is
+folded and split on spaces, and every token has to appear somewhere on the
+photo — in any of those fields — with no prefix or substring matching.
+`4821` finds `IMG_4821.jpg`; `IMG_48` does not, because that's not a token on
+the photo; `img 4821` finds it too, since both tokens match.
+
+Only photos the phone marks as in the timeline — not archived, hidden or
+locked — and that have actually been uploaded are searchable. Everything
+else is invisible to search regardless of what's in the bucket.
+
+It reads a metadata snapshot the phone app pushes to the bucket:
 
 ```
 .meta/s3immich.db.gz     the metadata database
@@ -50,17 +60,27 @@ metadata snapshot the phone app pushes to the bucket:
 ```
 
 Without those, the search box hides itself and the gallery works as before.
-The status file is checked on every load; the 19 MB snapshot is downloaded
-only when it has changed, imported in a Worker, and distilled into about
-11.5 MB of IndexedDB. Searching afterwards is local and synchronous.
+The status file is written by the phone after every push, and once by the
+script that migrates an existing bucket to this schema. It is checked on
+every load; the viewer re-imports when `lastModified` has changed, or when it
+has no usable index at all, which is what upgrading across an index format
+looks like. The 19 MB snapshot is downloaded only when a re-import is
+needed, imported in a Worker, and distilled into about 11.5 MB of IndexedDB.
+Searching afterwards is local and synchronous.
+
+The bucket's snapshot has to be at this schema for search to work at all.
+Against an older snapshot the gallery still works; the status bar reports
+that the search index could not be built.
 
 Search fires on Enter. Place names go to Nominatim, which decides membership
 by the place's actual polygon rather than its bounding box — so "Russia"
 doesn't return half of Canada.
 
-A **Google API key** is optional. With one, label search also works in Danish
-(queries are translated before matching) and a search that finds nothing
-offers "did you mean" suggestions. Without one, everything else still works.
+A **Google API key** is optional. With one, the query is also translated to
+English, run through the same matching, and its hits added to the results —
+so a Danish label is findable from a Danish query — and a search that finds
+nothing offers "did you mean" suggestions. Without one, everything else
+still works.
 
 Two things worth knowing about that key. It is **already in your bucket**: the
 phone app stores it inside the snapshot, so anyone who can read the bucket can
@@ -118,11 +138,14 @@ build output and get overwritten.
 
 Tests cover the pure modules — `sigv4`, `justify`, key parsing, and everything
 under `src/search/` except the Worker, the IndexedDB glue and the live network
-calls. `test/fixtures/search.db` is a ~20-row snapshot carved out by
-`tools/make_search_fixture.py`, which whitelists `store_entity` down to just
-the (placeholder) Google API key row and strips every other row, since one of
-them holds the live bucket credential in the real snapshot; the import tests
-run sql.js against it under Bun.
+calls. `test/fixtures/search.db` is generated straight from the phone's
+schema, with no source database at all, so there is nothing real in it:
+
+```sh
+python tools/make_search_fixture.py test/fixtures/search.db
+```
+
+The import tests run sql.js against it under Bun.
 
 The signer is checked against `tools/gen_sigv4_fixtures.py`, an independent
 implementation of the AWS spec that shares no code with it — for DELETE as

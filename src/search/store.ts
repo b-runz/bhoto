@@ -1,13 +1,15 @@
 /**
- * Persistence for the search records. Four keys in one object store:
- * `index`, `embeddings`, `snapshot` and `apikey`.
+ * Persistence for the import's records. Five keys in one object store:
+ * `index`, `embeddings`, `assets`, `snapshot` and `apikey`.
  *
- * `index` is loaded at boot -- about 1 MB, and search needs it synchronously.
- * `embeddings` is ten times that and is only ever read when a search returns
- * nothing, so it loads lazily and a session that never misses never pays for
- * it.
+ * `index` and `assets` are loaded at boot -- about 1 MB each, and search and
+ * layout need them synchronously. `embeddings` is ten times that and is only
+ * ever read when a search returns nothing, so it loads lazily and a session
+ * that never misses never pays for it.
  */
 import { getSearch, putSearchAll } from "../db";
+import { isAssetTable } from "../assets";
+import type { AssetTable } from "../assets";
 import { INDEX_FORMAT } from "./local";
 import type { Embeddings } from "./suggest";
 import type { SearchIndex } from "./local";
@@ -15,6 +17,7 @@ import type { ImportResult } from "./import";
 
 const INDEX = "index";
 const EMBEDDINGS = "embeddings";
+const ASSETS = "assets";
 const SNAPSHOT = "snapshot";
 const API_KEY = "apikey";
 
@@ -32,6 +35,7 @@ export function saveImport(result: ImportResult, lastModified: number): Promise<
   return putSearchAll([
     [INDEX, result.index],
     [EMBEDDINGS, result.embeddings],
+    [ASSETS, result.assets],
     [API_KEY, result.apiKey],
     [SNAPSHOT, lastModified],
   ]);
@@ -78,6 +82,16 @@ export function isCurrentIndex(value: unknown): value is SearchIndex {
 export async function loadIndex(): Promise<SearchIndex | null> {
   const stored = await getSearch<unknown>(INDEX);
   return isCurrentIndex(stored) ? stored : null;
+}
+
+/**
+ * The stored asset table, or null when there is none. An import from before
+ * the table existed left the other records but not this one, and the boot
+ * sequence treats that like a missing index: import again.
+ */
+export async function loadAssets(): Promise<AssetTable | null> {
+  const stored = await getSearch<unknown>(ASSETS);
+  return isAssetTable(stored) ? stored : null;
 }
 
 export async function loadEmbeddings(): Promise<Embeddings | null> {

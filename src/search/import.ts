@@ -27,8 +27,15 @@
  * (`й`, `ё`) or Greek tonos (`ή`), which `normalize` over-folds relative to
  * `unicode61 remove_diacritics 1`; see the `normalize` doc comment in
  * `./tokenize` for what that costs.
+ *
+ * The asset table is the one thing built here that is not about search. It
+ * takes every row with a `remote_key` regardless of visibility -- an
+ * archived photo's object is still in the bucket, so the grid still lays it
+ * out and a delete still has to find its companions -- and carries the
+ * row's dimensions and companion keys. See `../assets`.
  */
 import { normalize } from "./tokenize";
+import type { AssetTable } from "../assets";
 import { EMBEDDING_MODEL } from "./suggest";
 import type { Embeddings } from "./suggest";
 import type { SearchIndex } from "./local";
@@ -44,6 +51,7 @@ const RENDERABLE = "remote_key <> '' AND visibility = 0";
 export interface ImportResult {
   index: SearchIndex;
   embeddings: Embeddings;
+  assets: AssetTable;
   /** The raw JSON from store_entity 2002, or null. Parsed by the caller. */
   apiKey: string | null;
 }
@@ -186,6 +194,31 @@ export function buildIndex(db: SqlDatabase): ImportResult {
   const vectors = new Float32Array(embeddingLabels.length * DIMENSIONS);
   vectorChunks.forEach((chunk, i) => vectors.set(chunk, i * DIMENSIONS));
 
+  // ---- asset table ------------------------------------------------------
+  // Every object the snapshot knows, not just the searchable ones. Sorted
+  // the same way as `keys` above (plain `<`, code-unit order) because
+  // `assets.ts` binary-searches it. Empty companion columns are dropped
+  // here so a consumer never has to know the phone's '' sentinel.
+  const assetKeys: string[] = [];
+  const widths: number[] = [];
+  const heights: number[] = [];
+  const companions: string[][] = [];
+  for (const row of rows(
+    db,
+    `SELECT remote_key, width, height, thumb_key, live_photo_key, face_sidecar_key
+       FROM gallery_asset WHERE remote_key <> '' ORDER BY remote_key`,
+  )) {
+    const key = String(row[0]);
+    if (assetKeys[assetKeys.length - 1] === key) continue;
+    assetKeys.push(key);
+    widths.push(Math.max(0, Number(row[1]) || 0));
+    heights.push(Math.max(0, Number(row[2]) || 0));
+    companions.push(
+      [row[3], row[4], row[5]]
+        .filter((value): value is string => typeof value === "string" && value !== ""),
+    );
+  }
+
   // ---- API key ----------------------------------------------------------
   // store_entity predates the phone's Drift file and rides along in every
   // push, but the migration script builds the first snapshot from the asset
@@ -217,6 +250,12 @@ export function buildIndex(db: SqlDatabase): ImportResult {
       vectors,
       dims: DIMENSIONS,
       model: EMBEDDING_MODEL,
+    },
+    assets: {
+      keys: assetKeys,
+      width: Uint32Array.from(widths),
+      height: Uint32Array.from(heights),
+      companions,
     },
     apiKey,
   };

@@ -48,6 +48,12 @@ each column -- the viewer's index side, which emulates FTS5 `unicode61` with
 `remove_diacritics 1`. Note `ærø` and `glædelig`: NFD leaves `æ` and `ø`
 alone, so they stay in the index un-de-accented.
 
+Every row with a `remote_key` also lands in the asset table
+(`ImportResult.assets`) whatever its visibility, carrying `width`/`height`
+and the non-empty companion keys (`thumb_key`, `live_photo_key`,
+`face_sidecar_key`). ASSET_TRAIN_PLATFORM is the one row with all three
+companions; ASSET_SUNSET_PUNCTUATION has none.
+
 RENDERABLE (six rows; `keys`, sorted by `remote_key`, is exactly these):
 
 1. ASSET_TRAIN_PLATFORM -- `2024/03/14/IMG_4821.jpg`
@@ -79,6 +85,8 @@ RENDERABLE (six rows; `keys`, sorted by `remote_key`, is exactly these):
    ocr     `--- *** !!! ...`      -> nothing; normalizes to the empty string
    geo     none: has_location = 0, latitude and longitude at their 0.0
            defaults. The only unlocated row.
+   size    none: width and height at their 0 defaults, and no thumb_key.
+           The only row with no dimensions and no companions.
 
 5. ASSET_SAILBOAT_AERO -- `2024/08/05/IMG_5099.jpg`
    name    `img 5099 jpg`         -> img, 5099, jpg
@@ -352,6 +360,11 @@ ASSET_TRAIN_PLATFORM = {
     "local_id": "local-0001",
     "remote_key": "2024/03/14/IMG_4821.jpg",
     "thumb_key": "2024/03/14/thumb/IMG_4821.jpg",
+    # A live photo: the phone uploads the paired video under the original's
+    # date path with the video's own extension, and the ML pass later stamps
+    # a face sidecar. Both are companions the viewer deletes with the photo.
+    "live_photo_key": "2024/03/14/IMG_4821.MOV",
+    "face_sidecar_key": ".faces/2024/03/14/IMG_4821.jpg.json.gz",
     "width": 4032,
     "height": 3024,
     "sort_time_utc_ms": ms("2024-03-14T09:15:00"),
@@ -440,9 +453,9 @@ ASSET_SUNSET_PUNCTUATION = {
     "name_normalized": "pxl 20240719 101530123 jpg",
     "local_id": "local-0004",
     "remote_key": "2024/07/19/PXL_20240719_101530123.jpg",
-    "thumb_key": "2024/07/19/thumb/PXL_20240719_101530123.jpg",
-    "width": 4080,
-    "height": 3072,
+    # No thumb_key and width/height at their 0 defaults: a row recorded by a
+    # phone that had neither a thumbnail nor dimensions for it. The viewer
+    # falls back to the conventional `.thumbs/` twin and to measuring.
     "sort_time_utc_ms": ms("2024-07-19T10:15:30"),
     "added_at_utc_ms": ms("2024-07-19T10:20:00"),
     "file_modified_utc_ms": ms("2024-07-19T10:15:30"),

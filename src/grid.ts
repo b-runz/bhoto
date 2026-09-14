@@ -8,6 +8,7 @@
  */
 import { DEFAULT_ASPECT, justify, type Row } from "./justify";
 import { yearOf } from "./keys";
+import { sameShape } from "./meta";
 import type { MetaProvider } from "./meta";
 import { thumbUrl } from "./s3api";
 import type { Creds, Item, Section } from "./types";
@@ -356,11 +357,15 @@ export class Grid {
   /**
    * A real aspect ratio arrived. Reflow is confined to this one date, so
    * nothing shifts under the cursor, and once measured it never recurs.
+   *
+   * Compared by shape, not by pixel: the provider usually already knows the
+   * original's size from the snapshot, and a thumbnail of the same shape at
+   * a different scale is not news worth a reflow.
    */
   private measured(state: SectionState, key: string, w: number, h: number): void {
     const before = this.options.meta.get(key);
     this.options.meta.observe(key, w, h);
-    if (before && before.w === w && before.h === h) return;
+    if (sameShape(before, w, h)) return;
 
     this.dirty.add(state);
     if (this.frame) return;

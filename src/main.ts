@@ -2,6 +2,7 @@
  * Wiring: credentials, listing, and the three screens (setup, gallery,
  * failure). Cached manifest paints immediately; a re-list runs behind it.
  */
+import { companionsFor } from "./assets";
 import { clearCreds, getCreds, getManifest, nuke, putCreds, putManifest } from "./db";
 import { Grid, toSections } from "./grid";
 import { dateLabel } from "./keys";
@@ -13,7 +14,7 @@ import { presignGet } from "./sigv4";
 import { embedQuery, clearGoogleCaches, translateQuery } from "./search/google";
 import { searchNominatim } from "./search/nominatim";
 import { runSearch, suggestFor } from "./search/search";
-import { getSnapshot, loadApiKey, loadEmbeddings, loadIndex, saveImport } from "./search/store";
+import { getSnapshot, loadApiKey, loadAssets, loadEmbeddings, loadIndex, saveImport } from "./search/store";
 import type { SearchDeps } from "./search/search";
 import type { SearchIndex } from "./search/local";
 import type { ImportResult } from "./search/import";
@@ -119,7 +120,11 @@ async function boot(creds: Creds): Promise<void> {
   show("gallery");
   status("Loading…", true);
 
-  const meta = await MeasuredProvider.load();
+  // What the phone's snapshot knows about each object: sizes for the grid's
+  // first paint, companion keys for deletes. Null until a snapshot has been
+  // imported, and everything below copes with that.
+  const assets = await loadAssets();
+  const meta = await MeasuredProvider.load(assets);
   const scroller = el("scroller");
 
   const lightbox = new Lightbox({
@@ -177,7 +182,11 @@ async function boot(creds: Creds): Promise<void> {
    *
    * The bucket is the source of truth, so only keys S3 confirmed are dropped
    * locally. Nothing here touches the search snapshot: that database belongs
-   * to the phone app, which drops rows whose object has gone.
+   * to the phone app. The phone notices a deletion when the thumbnail it
+   * fetches answers 404, tombstones the row so no sync resurrects it, and
+   * drops it from the snapshot on its next push -- which is why the
+   * thumbnail and the row's other companions are deleted along with the
+   * original, and why a companion left behind is reported.
    */
   const removePhotos = async (keys: string[]): Promise<boolean> => {
     if (keys.length === 0) return false;
@@ -186,6 +195,7 @@ async function boot(creds: Creds): Promise<void> {
 
     status(`Deleting ${what}…`, true);
     const result = await deleteItems(creds, keys, {
+      companions: (key) => (assets === null ? [] : companionsFor(assets, key)),
       onProgress: (done, total) => status(`Deleting ${done} of ${total}…`, true),
     });
 
@@ -200,12 +210,18 @@ async function boot(creds: Creds): Promise<void> {
       await putManifest(library).catch(() => {});
     }
 
+    const notes: string[] = [];
     const failure = result.failed[0];
-    status(
-      failure === undefined
-        ? ""
-        : `Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`,
-    );
+    if (failure !== undefined) {
+      notes.push(`Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`);
+    }
+    const orphans = result.orphans.length;
+    if (orphans > 0) {
+      notes.push(
+        `${orphans} leftover ${orphans === 1 ? "object" : "objects"} (thumbnails or sidecars) could not be removed; the phone may not notice ${orphans === 1 ? "that deletion" : "those deletions"} until it fetches the originals.`,
+      );
+    }
+    status(notes.join(" "));
     return gone.size > 0;
   };
 
@@ -260,17 +276,18 @@ async function boot(creds: Creds): Promise<void> {
   // exists. Reusing the promise keeps that to a single deserialization.
   const searchIndex = wireSearch(creds, () => library, render);
 
-  // A stored `lastModified` with no searchable index behind it -- the
-  // pre-migration index format, or a record lost while the snapshot marker
-  // survived -- counts as nothing stored. Without this the unchanged remote
-  // `lastModified` would equal the stale local one and the re-import the new
-  // format needs would never fire.
+  // A stored `lastModified` with no searchable index or asset table behind
+  // it -- the pre-migration index format, an import from before the asset
+  // table existed, or a record lost while the snapshot marker survived --
+  // counts as nothing stored. Without this the unchanged remote
+  // `lastModified` would equal the stale local one and the re-import the
+  // new records need would never fire.
   const [remote, marker, index] = await Promise.all([
     remoteSnapshot(creds),
     getSnapshot(),
     searchIndex,
   ]);
-  const local = index !== null ? marker : null;
+  const local = index !== null && assets !== null ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });

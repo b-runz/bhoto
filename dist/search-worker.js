@@ -111,6 +111,20 @@
     }
     const vectors = new Float32Array(embeddingLabels.length * DIMENSIONS);
     vectorChunks.forEach((chunk, i) => vectors.set(chunk, i * DIMENSIONS));
+    const assetKeys = [];
+    const widths = [];
+    const heights = [];
+    const companions = [];
+    for (const row of rows(db, `SELECT remote_key, width, height, thumb_key, live_photo_key, face_sidecar_key
+       FROM gallery_asset WHERE remote_key <> '' ORDER BY remote_key`)) {
+      const key = String(row[0]);
+      if (assetKeys[assetKeys.length - 1] === key)
+        continue;
+      assetKeys.push(key);
+      widths.push(Math.max(0, Number(row[1]) || 0));
+      heights.push(Math.max(0, Number(row[2]) || 0));
+      companions.push([row[3], row[4], row[5]].filter((value) => typeof value === "string" && value !== ""));
+    }
     let apiKey = null;
     const hasStore = rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'store_entity'");
     if (hasStore.length > 0) {
@@ -135,6 +149,12 @@
         vectors,
         dims: DIMENSIONS,
         model: EMBEDDING_MODEL
+      },
+      assets: {
+        keys: assetKeys,
+        width: Uint32Array.from(widths),
+        height: Uint32Array.from(heights),
+        companions
       },
       apiKey
     };

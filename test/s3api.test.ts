@@ -71,19 +71,21 @@ describe("deleteItems", () => {
     const result = await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl });
     expect(result.deleted).toEqual(["2022/08/29/IMG_1234.jpg"]);
     expect(result.failed).toEqual([]);
+    expect(result.orphans).toEqual([]);
     expect(seen.map((r) => r.path).sort()).toEqual([
       ".thumbs/2022/08/29/IMG_1234.jpg",
       "2022/08/29/IMG_1234.jpg",
     ]);
   });
 
-  test("a failed thumbnail still counts the photo as deleted", async () => {
+  test("a failed thumbnail still counts the photo as deleted, and is reported as an orphan", async () => {
     const { fetchImpl } = recorder({
       ".thumbs/2022/08/29/IMG_1234.jpg": { status: 403, code: "AccessDenied" },
     });
     const result = await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl });
     expect(result.deleted).toEqual(["2022/08/29/IMG_1234.jpg"]);
     expect(result.failed).toEqual([]);
+    expect(result.orphans).toEqual([".thumbs/2022/08/29/IMG_1234.jpg"]);
   });
 
   test("a failed original is reported and not counted as deleted", async () => {
@@ -98,6 +100,64 @@ describe("deleteItems", () => {
     expect(result.deleted).toEqual(["2022/08/29/A.jpg"]);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]!.key).toBe("2022/08/29/B.jpg");
+  });
+
+  test("deletes the companions the snapshot names, after the original", async () => {
+    const { seen, fetchImpl } = recorder();
+    const companions = (key: string) =>
+      key === "2022/08/29/IMG_1234.jpg"
+        ? [".thumbs/2022/08/29/IMG_1234.jpg", "2022/08/29/IMG_1234.MOV", ".faces/2022/08/29/IMG_1234.jpg.json.gz"]
+        : [];
+    const result = await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl, companions });
+    expect(result.deleted).toEqual(["2022/08/29/IMG_1234.jpg"]);
+    expect(result.orphans).toEqual([]);
+    // The original goes first: it is what proves the photo gone, and a
+    // companion deleted for a photo that then fails leaves a blank tile.
+    expect(seen[0]!.path).toBe("2022/08/29/IMG_1234.jpg");
+    // The conventional .thumbs/ twin is attempted once even though the
+    // snapshot also names it.
+    expect(seen.map((r) => r.path).slice(1).sort()).toEqual([
+      ".faces/2022/08/29/IMG_1234.jpg.json.gz",
+      ".thumbs/2022/08/29/IMG_1234.jpg",
+      "2022/08/29/IMG_1234.MOV",
+    ]);
+  });
+
+  test("still removes the conventional thumbnail when the snapshot names a different one", async () => {
+    const { seen, fetchImpl } = recorder();
+    const companions = () => ["2022/08/29/thumb/IMG_1234.jpg"];
+    await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl, companions });
+    expect(seen.map((r) => r.path).sort()).toEqual([
+      ".thumbs/2022/08/29/IMG_1234.jpg",
+      "2022/08/29/IMG_1234.jpg",
+      "2022/08/29/thumb/IMG_1234.jpg",
+    ]);
+  });
+
+  test("a companion that will not delete is reported as an orphan, and the photo still counts", async () => {
+    const { fetchImpl } = recorder({
+      "2022/08/29/IMG_1234.MOV": { status: 403, code: "AccessDenied" },
+      ".thumbs/2022/08/29/IMG_1234.jpg": { status: 403, code: "AccessDenied" },
+    });
+    const companions = () => ["2022/08/29/IMG_1234.MOV"];
+    const result = await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl, companions });
+    expect(result.deleted).toEqual(["2022/08/29/IMG_1234.jpg"]);
+    expect(result.failed).toEqual([]);
+    expect(result.orphans.sort()).toEqual([
+      ".thumbs/2022/08/29/IMG_1234.jpg",
+      "2022/08/29/IMG_1234.MOV",
+    ]);
+  });
+
+  test("a failed original leaves its companions untouched", async () => {
+    const { seen, fetchImpl } = recorder({
+      "2022/08/29/IMG_1234.jpg": { status: 403, code: "AccessDenied" },
+    });
+    const companions = () => ["2022/08/29/IMG_1234.MOV"];
+    const result = await deleteItems(creds, ["2022/08/29/IMG_1234.jpg"], { fetchImpl, companions });
+    expect(result.deleted).toEqual([]);
+    expect(result.orphans).toEqual([]);
+    expect(seen.map((r) => r.path)).toEqual(["2022/08/29/IMG_1234.jpg"]);
   });
 
   test("never exceeds the concurrency limit", async () => {
@@ -128,7 +188,7 @@ describe("deleteItems", () => {
   test("deleting nothing touches the network not at all", async () => {
     const { seen, fetchImpl } = recorder();
     const result = await deleteItems(creds, [], { fetchImpl });
-    expect(result).toEqual({ deleted: [], failed: [] });
+    expect(result).toEqual({ deleted: [], failed: [], orphans: [] });
     expect(seen).toEqual([]);
   });
 });

@@ -19,7 +19,8 @@ single inverted index over name, labels, OCR and camera text; token-AND
 matching that reproduces a bare FTS5 `MATCH`; a synthetic test fixture at the
 new schema; README updates.
 
-**Out:** thumbnail dimensions from the row, faces, people, albums, a snapshot
+**Out:** ~~thumbnail dimensions from the row~~ (added by the 2026-09-14
+addendum below), faces, people, albums, a snapshot
 driven grid. The grid still lists the bucket.
 
 **Kept as-is:** Danish translation of the query, place search, "did you mean"
@@ -337,3 +338,54 @@ as before.
 4. Deploy the viewer. Until step 3 runs, the new viewer shows the gallery with
    search unavailable, and the old viewer keeps working against the old
    snapshot.
+
+## Addendum 2026-09-14 — dimensions and companions from the row
+
+Two things the original scope left out, added once the phone side settled.
+
+### The asset table
+
+The import builds one more record, `assets`, saved in the same transaction as
+the other four and validated on load by `isAssetTable`. It covers every row
+with `remote_key <> ''` **regardless of visibility** — the grid lists the
+bucket, so an archived photo is drawn and can be deleted even though it is
+not searchable. Columnar and sorted by `remote_key` like the index:
+
+| Field | Contents |
+|---|---|
+| `keys` | every remote key, sorted by code unit |
+| `width`, `height` | `Uint32Array`, parallel to `keys`; `0` when unknown |
+| `companions` | per key, the non-empty `thumb_key`, `live_photo_key`, `face_sidecar_key`, in that order |
+
+The phone stores display-oriented dimensions: its Android sync swaps width
+and height for a 90°/270° `ORIENTATION` before recording them and stores
+`orientation` as 0, and its migration swapped from EXIF the same way. So the
+viewer applies no orientation correction.
+
+### Dimensions
+
+`MeasuredProvider` answers from a measurement if one exists, otherwise from
+the asset table. A thumbnail measurement is persisted only when its aspect
+ratio differs from what the provider already knows by more than 1%
+(`sameShape`), and the grid reflows a section on the same test. Exact pixel
+equality would never hold — the snapshot has the original's size and the
+browser measures a downscaled thumbnail — and would reflow every section as
+its thumbnails arrived.
+
+### Deletes
+
+`deleteItems` takes a `companions(key)` callback. The original is deleted
+first and alone decides success, as on the phone; then each companion plus
+the conventional `.thumbs/` twin (deduplicated) is deleted best-effort, and
+failures come back as `orphans` rather than failing the photo. The status bar
+reports them because the phone learns of a deletion from a thumbnail 404
+(`GallerySyncService.handleFetchFailure`), tombstones the row
+(`deleted_asset`, spec 2026-09-11 on the phone) and drops it on its next
+push; a thumbnail left behind delays that.
+
+### Re-import
+
+Boot treats a missing asset table like a missing index: a stored
+`lastModified` counts as nothing stored, and the snapshot is imported again.
+A viewer upgraded over an import from before this addendum therefore
+re-imports once.

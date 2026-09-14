@@ -73,8 +73,15 @@ export async function deleteObject(
 export interface DeleteOptions {
   /** Photos deleted so far, out of `total`. Fires once per photo. */
   onProgress?: (done: number, total: number) => void;
-  /** Simultaneous photos in flight. Each one is two requests. */
+  /** Simultaneous photos in flight. Each one is at least two requests. */
   concurrency?: number;
+  /**
+   * The other objects that belong to a photo, as the snapshot records them:
+   * its thumbnail, a live photo's video, a face sidecar. The conventional
+   * `.thumbs/` twin is always attempted as well, so a photo the snapshot
+   * does not know still loses its thumbnail.
+   */
+  companions?: (key: string) => string[];
   fetchImpl?: typeof fetch;
 }
 
@@ -82,16 +89,26 @@ export interface DeleteResult {
   /** Keys whose original is gone from the bucket. */
   deleted: string[];
   failed: Array<{ key: string; error: unknown }>;
+  /**
+   * Companion objects that would not delete for a photo that did. They are
+   * still in the bucket. Worth telling the user about: the phone learns of
+   * a deletion when the thumbnail it fetches answers 404, so a thumbnail
+   * left behind delays that.
+   */
+  orphans: string[];
 }
 
 const DELETE_CONCURRENCY = 6;
 
 /**
- * Deletes originals and their thumbnails, a few photos at a time.
+ * Deletes originals and their companion objects, a few photos at a time.
  *
- * The original is what decides the outcome. A thumbnail that will not delete
- * leaves an orphan under .thumbs/, which is invisible and harmless; dropping
- * the photo from the library anyway is better than keeping a row whose
+ * The order is the phone's own: the original first, and only if that
+ * succeeds the rest. The original is what decides the outcome -- it is the
+ * object whose absence the phone treats as proof the photo is gone -- and a
+ * companion deleted for a photo whose original then failed would leave a
+ * blank tile. A companion that will not delete is reported, not fatal:
+ * dropping the photo from the library is better than keeping one whose
  * original has already gone.
  */
 export async function deleteItems(
@@ -99,10 +116,10 @@ export async function deleteItems(
   keys: string[],
   options: DeleteOptions = {},
 ): Promise<DeleteResult> {
-  const { onProgress, fetchImpl } = options;
+  const { onProgress, fetchImpl, companions } = options;
   const limit = Math.max(1, options.concurrency ?? DELETE_CONCURRENCY);
 
-  const result: DeleteResult = { deleted: [], failed: [] };
+  const result: DeleteResult = { deleted: [], failed: [], orphans: [] };
   let next = 0;
   let done = 0;
 
@@ -114,14 +131,24 @@ export async function deleteItems(
 
       try {
         await deleteObject(creds, key, fetchImpl);
-        // Best effort, and deliberately after the original: a thumbnail
-        // deleted for a photo that then failed would leave a blank tile.
-        await deleteObject(creds, thumbKey(key), fetchImpl).catch(() => {});
-        result.deleted.push(key);
       } catch (error) {
         result.failed.push({ key, error });
+        onProgress?.(++done, keys.length);
+        continue;
       }
 
+      // A Set, because the snapshot's thumb_key is normally the conventional
+      // twin, and one DELETE per object is enough.
+      const extras = new Set(companions?.(key) ?? []);
+      extras.add(thumbKey(key));
+      for (const extra of extras) {
+        try {
+          await deleteObject(creds, extra, fetchImpl);
+        } catch {
+          result.orphans.push(extra);
+        }
+      }
+      result.deleted.push(key);
       onProgress?.(++done, keys.length);
     }
   };

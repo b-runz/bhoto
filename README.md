@@ -76,6 +76,15 @@ Search fires on Enter. Place names go to Nominatim, which decides membership
 by the place's actual polygon rather than its bounding box — so "Russia"
 doesn't return half of Canada.
 
+The snapshot does one more job that has nothing to do with search: it knows
+every photo's pixel size, so the grid lays rows out with true aspect ratios
+on first paint instead of guessing 3:2 until each thumbnail loads. This
+covers every object in the bucket, archived or not. A loaded thumbnail still
+has the last word, but only when its shape actually differs from what the
+phone recorded — the same shape at thumbnail scale is not a reason to
+reflow. Photos the phone never measured, and photos from before any snapshot
+was imported, are measured from their thumbnails as before.
+
 A **Google API key** is optional. With one, the query is also translated to
 English, run through the same matching, and its hits added to the results —
 so a Danish label is findable from a Danish query — and a search that finds
@@ -97,21 +106,30 @@ clears the selection. The lightbox has a trash button and takes the `Delete`
 key. Both confirm first, and both are permanent — unless the bucket has
 versioning, nothing here can undo them.
 
-Deleting a photo removes two objects: the original and its `.thumbs/` twin. A
-thumbnail that will not delete leaves a harmless orphan rather than failing
-the photo; an original that will not delete is reported and the photo stays.
+Deleting a photo follows the phone app's own order. The original goes first,
+and if that fails the photo is reported and stays, with nothing else touched.
+Only then go its companions: the `.thumbs/` twin, and whatever else the
+snapshot says the phone uploaded for that photo — a live photo's video, a
+face sidecar under `.faces/`, a thumbnail stored under some other key. Any of
+those that will not delete is left in the bucket and counted in the status
+bar rather than failing the photo. Without a snapshot only the `.thumbs/`
+twin is known.
 
 This needs more than read access: `s3:DeleteObject` on the key, and `DELETE`
 in the bucket's CORS rule. Without either, deletes fail and say so, and the
 rest of the app is unaffected.
 
-**The search index is not updated, by design.** `.meta/s3immich.db.gz` belongs
-to the phone app, which is also the only writer that survives — anything this
-app wrote there would be overwritten by the next push. The contract is instead
-that the phone reconciles: a row whose object is gone from the bucket is a row
-it drops. Until that runs, a search can match a key that no longer exists;
-results are intersected with the bucket listing, so such a key simply doesn't
-appear.
+**The snapshot is not updated here, by design.** `.meta/s3immich.db.gz`
+belongs to the phone app, which is also the only writer that survives —
+anything this app wrote there would be overwritten by the next push. The
+phone finds out about a deletion the next time it fetches the photo's
+thumbnail and gets a 404: it drops the row, writes a tombstone so no sync
+can resurrect it, and its next push publishes a snapshot without the photo.
+That is why the thumbnail is deleted along with the original and why a
+thumbnail left behind is worth reporting — until the phone sees the 404 it
+keeps the row, and a search here can match a key that no longer exists.
+Results are intersected with the bucket listing, so such a key simply
+doesn't appear.
 
 ## Bucket prerequisites
 
@@ -136,9 +154,10 @@ and nothing else, to any static host, with no build step at the other end.
 Edit `index.html` and `css/app.css` at the root; the copies inside `dist/` are
 build output and get overwritten.
 
-Tests cover the pure modules — `sigv4`, `justify`, key parsing, and everything
-under `src/search/` except the Worker, the IndexedDB glue and the live network
-calls. `test/fixtures/search.db` is generated straight from the phone's
+Tests cover the pure modules — `sigv4`, `justify`, key parsing, the asset
+table and the dimension provider (with persistence injected), the delete
+sequencing, and everything under `src/search/` except the Worker, the
+IndexedDB glue and the live network calls. `test/fixtures/search.db` is generated straight from the phone's
 schema, with no source database at all, so there is nothing real in it:
 
 ```sh

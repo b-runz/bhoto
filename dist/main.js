@@ -1,3 +1,39 @@
+// src/assets.ts
+function isAssetTable(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const candidate = value;
+  return Array.isArray(candidate.keys) && candidate.width instanceof Uint32Array && candidate.height instanceof Uint32Array && Array.isArray(candidate.companions) && candidate.width.length === candidate.keys.length && candidate.height.length === candidate.keys.length && candidate.companions.length === candidate.keys.length;
+}
+function dimensionsFor(table, key) {
+  const at = indexOf(table, key);
+  if (at === -1)
+    return;
+  const w = table.width[at];
+  const h = table.height[at];
+  return w > 0 && h > 0 ? { w, h } : undefined;
+}
+function companionsFor(table, key) {
+  const at = indexOf(table, key);
+  return at === -1 ? [] : table.companions[at];
+}
+function indexOf(table, key) {
+  const keys = table.keys;
+  let low = 0;
+  let high = keys.length - 1;
+  while (low <= high) {
+    const mid = low + high >> 1;
+    const probe = keys[mid];
+    if (probe === key)
+      return mid;
+    if (probe < key)
+      low = mid + 1;
+    else
+      high = mid - 1;
+  }
+  return -1;
+}
+
 // src/db.ts
 var DB_NAME = "s3photos";
 var VERSION = 2;
@@ -230,6 +266,61 @@ function yearOf(date) {
   return date.slice(0, 4);
 }
 
+// src/meta.ts
+var FLUSH_MS = 400;
+var SAME_SHAPE = 0.01;
+function sameShape(known, w, h) {
+  if (known === undefined)
+    return false;
+  if (!(known.w > 0 && known.h > 0 && w > 0 && h > 0))
+    return false;
+  const a = known.w / known.h;
+  const b = w / h;
+  return Math.abs(a - b) / a < SAME_SHAPE;
+}
+
+class MeasuredProvider {
+  measured;
+  assets;
+  persist;
+  pending = new Map;
+  timer;
+  constructor(measured = new Map, assets = null, persist = putMetaBatch) {
+    this.measured = measured;
+    this.assets = assets;
+    this.persist = persist;
+  }
+  static async load(assets) {
+    return new MeasuredProvider(await getAllMeta(), assets);
+  }
+  get(key) {
+    const measured = this.measured.get(key);
+    if (measured !== undefined)
+      return measured;
+    return this.assets === null ? undefined : dimensionsFor(this.assets, key);
+  }
+  observe(key, w, h) {
+    if (!(w > 0 && h > 0))
+      return;
+    if (sameShape(this.get(key), w, h))
+      return;
+    const record = { ...this.measured.get(key), w, h };
+    this.measured.set(key, record);
+    this.pending.set(key, record);
+    this.scheduleFlush();
+  }
+  scheduleFlush() {
+    if (this.timer !== undefined)
+      return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      const batch = this.pending;
+      this.pending = new Map;
+      this.persist(batch).catch(() => {});
+    }, FLUSH_MS);
+  }
+}
+
 // src/sigv4.ts
 var ALGORITHM = "AWS4-HMAC-SHA256";
 var SERVICE = "s3";
@@ -374,9 +465,9 @@ async function deleteObject(creds, key, fetchImpl = fetch) {
 }
 var DELETE_CONCURRENCY = 6;
 async function deleteItems(creds, keys, options = {}) {
-  const { onProgress, fetchImpl } = options;
+  const { onProgress, fetchImpl, companions } = options;
   const limit = Math.max(1, options.concurrency ?? DELETE_CONCURRENCY);
-  const result = { deleted: [], failed: [] };
+  const result = { deleted: [], failed: [], orphans: [] };
   let next = 0;
   let done = 0;
   const worker = async () => {
@@ -387,11 +478,21 @@ async function deleteItems(creds, keys, options = {}) {
         return;
       try {
         await deleteObject(creds, key, fetchImpl);
-        await deleteObject(creds, thumbKey(key), fetchImpl).catch(() => {});
-        result.deleted.push(key);
       } catch (error) {
         result.failed.push({ key, error });
+        onProgress?.(++done, keys.length);
+        continue;
       }
+      const extras = new Set(companions?.(key) ?? []);
+      extras.add(thumbKey(key));
+      for (const extra of extras) {
+        try {
+          await deleteObject(creds, extra, fetchImpl);
+        } catch {
+          result.orphans.push(extra);
+        }
+      }
+      result.deleted.push(key);
       onProgress?.(++done, keys.length);
     }
   };
@@ -722,7 +823,7 @@ class Grid {
   measured(state, key, w, h) {
     const before = this.options.meta.get(key);
     this.options.meta.observe(key, w, h);
-    if (before && before.w === w && before.h === h)
+    if (sameShape(before, w, h))
       return;
     this.dirty.add(state);
     if (this.frame)
@@ -896,44 +997,6 @@ function spinner() {
   const el = document.createElement("div");
   el.className = "lb-spinner";
   return el;
-}
-
-// src/meta.ts
-var FLUSH_MS = 400;
-
-class MeasuredProvider {
-  cache = new Map;
-  pending = new Map;
-  timer;
-  static async load() {
-    const provider = new MeasuredProvider;
-    provider.cache = await getAllMeta();
-    return provider;
-  }
-  get(key) {
-    return this.cache.get(key);
-  }
-  observe(key, w, h) {
-    if (!(w > 0 && h > 0))
-      return;
-    const existing = this.cache.get(key);
-    if (existing && existing.w === w && existing.h === h)
-      return;
-    const record = { ...existing, w, h };
-    this.cache.set(key, record);
-    this.pending.set(key, record);
-    this.scheduleFlush();
-  }
-  scheduleFlush() {
-    if (this.timer !== undefined)
-      return;
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      const batch = this.pending;
-      this.pending = new Map;
-      putMetaBatch(batch);
-    }, FLUSH_MS);
-  }
 }
 
 // src/rail.ts
@@ -1726,6 +1789,7 @@ async function labelSuggestions(query, deps) {
 // src/search/store.ts
 var INDEX = "index";
 var EMBEDDINGS = "embeddings";
+var ASSETS = "assets";
 var SNAPSHOT = "snapshot";
 var API_KEY = "apikey";
 async function getSnapshot() {
@@ -1736,6 +1800,7 @@ function saveImport(result, lastModified) {
   return putSearchAll([
     [INDEX, result.index],
     [EMBEDDINGS, result.embeddings],
+    [ASSETS, result.assets],
     [API_KEY, result.apiKey],
     [SNAPSHOT, lastModified]
   ]);
@@ -1749,6 +1814,10 @@ function isCurrentIndex(value) {
 async function loadIndex() {
   const stored = await getSearch(INDEX);
   return isCurrentIndex(stored) ? stored : null;
+}
+async function loadAssets() {
+  const stored = await getSearch(ASSETS);
+  return isAssetTable(stored) ? stored : null;
 }
 async function loadEmbeddings() {
   return await getSearch(EMBEDDINGS) ?? null;
@@ -1844,7 +1913,8 @@ function showSetup(prefill, message) {
 async function boot(creds) {
   show("gallery");
   status("Loading…", true);
-  const meta = await MeasuredProvider.load();
+  const assets = await loadAssets();
+  const meta = await MeasuredProvider.load(assets);
   const scroller = el("scroller");
   const lightbox = new Lightbox({
     root: el("lightbox"),
@@ -1890,6 +1960,7 @@ async function boot(creds) {
       return false;
     status(`Deleting ${what}…`, true);
     const result = await deleteItems(creds, keys, {
+      companions: (key) => assets === null ? [] : companionsFor(assets, key),
       onProgress: (done, total) => status(`Deleting ${done} of ${total}…`, true)
     });
     const gone = new Set(result.deleted);
@@ -1898,8 +1969,16 @@ async function boot(creds) {
       render(view.filter((item) => !gone.has(item.key)));
       await putManifest(library).catch(() => {});
     }
+    const notes = [];
     const failure = result.failed[0];
-    status(failure === undefined ? "" : `Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`);
+    if (failure !== undefined) {
+      notes.push(`Deleted ${gone.size} of ${keys.length}. ${failure.key}: ${explain(failure.error)}`);
+    }
+    const orphans = result.orphans.length;
+    if (orphans > 0) {
+      notes.push(`${orphans} leftover ${orphans === 1 ? "object" : "objects"} (thumbnails or sidecars) could not be removed; the phone may not notice ${orphans === 1 ? "that deletion" : "those deletions"} until it fetches the originals.`);
+    }
+    status(notes.join(" "));
     return gone.size > 0;
   };
   el("selbar-clear").onclick = () => grid.clearSelection();
@@ -1949,7 +2028,7 @@ async function boot(creds) {
     getSnapshot(),
     searchIndex
   ]);
-  const local = index !== null ? marker : null;
+  const local = index !== null && assets !== null ? marker : null;
   if (remote !== null && remote !== local) {
     status("Importing search index…", true);
     const url = await presignGet({ creds, key: SNAPSHOT_KEY });

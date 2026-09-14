@@ -5,6 +5,7 @@ import { INDEX_FORMAT, matchTokens } from "../../src/search/local";
 import type { SearchIndex } from "../../src/search/local";
 import type { ImportResult } from "../../src/search/import";
 import type { SqlDatabase } from "../../src/search/sqljs";
+import { companionsFor, dimensionsFor } from "../../src/assets";
 
 /**
  * Every expectation below is drawn from the fixture documented in
@@ -19,6 +20,8 @@ const KEY_DOG_PORTRAIT = "2024/05/02/DSC_0007.JPG";
 const KEY_SUNSET_PUNCTUATION = "2024/07/19/PXL_20240719_101530123.jpg";
 const KEY_SAILBOAT_AERO = "2024/08/05/IMG_5099.jpg";
 const KEY_BICYCLE_BENCH = "2024/11/23/IMG_6410.jpg";
+/** In the bucket, but archived: never searchable, always laid out. */
+const KEY_ARCHIVED = "2024/12/24/IMG_7777.jpg";
 
 /** The six renderable keys, in `ORDER BY remote_key` order. */
 const RENDERABLE_KEYS = [
@@ -283,6 +286,37 @@ describe("buildIndex", () => {
     expect([...result.index.postings]).toEqual([...expected.index.postings]);
     expect([...result.index.geoKeys]).toEqual([...expected.index.geoKeys]);
     expect(result.embeddings.labels).toEqual(expected.embeddings.labels);
+  });
+
+  test("the asset table lists every remote key whatever its visibility, sorted", async () => {
+    const { assets } = await imported();
+    // The archived row is in the bucket, so the grid shows it and needs its
+    // dimensions; the local-only row has no object and is left out.
+    expect(assets.keys).toEqual([...RENDERABLE_KEYS, KEY_ARCHIVED]);
+    expect(assets.width.length).toBe(assets.keys.length);
+    expect(assets.height.length).toBe(assets.keys.length);
+    expect(assets.companions.length).toBe(assets.keys.length);
+  });
+
+  test("the asset table carries the phone's display-oriented dimensions", async () => {
+    const { assets } = await imported();
+    expect(dimensionsFor(assets, KEY_TRAIN_PLATFORM)).toEqual({ w: 4032, h: 3024 });
+    expect(dimensionsFor(assets, KEY_BICYCLE_BENCH)).toEqual({ w: 4284, h: 5712 });
+    expect(dimensionsFor(assets, KEY_ARCHIVED)).toEqual({ w: 5472, h: 3648 });
+    // The sunset row was recorded before the phone knew its size.
+    expect(dimensionsFor(assets, KEY_SUNSET_PUNCTUATION)).toBeUndefined();
+  });
+
+  test("the asset table names each row's companion objects, empty keys dropped", async () => {
+    const { assets } = await imported();
+    expect(companionsFor(assets, KEY_TRAIN_PLATFORM)).toEqual([
+      "2024/03/14/thumb/IMG_4821.jpg",
+      "2024/03/14/IMG_4821.MOV",
+      ".faces/2024/03/14/IMG_4821.jpg.json.gz",
+    ]);
+    expect(companionsFor(assets, KEY_TRAIN_CAFE)).toEqual(["2024/03/14/thumb/IMG_4822.jpg"]);
+    // No thumb_key, no live photo, no sidecar: nothing beyond the original.
+    expect(companionsFor(assets, KEY_SUNSET_PUNCTUATION)).toEqual([]);
   });
 
   test("the built index answers a real multi-token search", async () => {

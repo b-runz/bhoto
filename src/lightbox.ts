@@ -59,23 +59,41 @@ export class Lightbox {
     });
 
     document.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("popstate", this.onPopState);
   }
 
   setItems(items: Item[]): void {
     this.items = items;
   }
 
+  /**
+   * Pushes a history entry the first time the lightbox opens over the
+   * timeline, so the browser's back button -- and the mouse's back button,
+   * which the browser treats as the same navigation -- closes the viewer and
+   * lands back on the timeline at its current scroll position instead of
+   * leaving the page entirely.
+   */
   show(index: number): void {
     if (index < 0 || index >= this.items.length) return;
+    const wasOpen = this.open;
     this.index = index;
     this.open = true;
     this.options.root.hidden = false;
     document.body.classList.add("lb-open");
     this.options.root.focus();
+    if (!wasOpen) history.pushState({ lightbox: true }, "");
     void this.render();
   }
 
   close(): void {
+    this.closeView();
+    // Pop the entry show() pushed, so back/forward stays in sync with what's
+    // on screen. This re-enters via onPopState, which is a no-op because
+    // `open` is already false.
+    if (history.state?.lightbox) history.back();
+  }
+
+  private closeView(): void {
     if (!this.open) return;
     this.open = false;
     this.token++;
@@ -87,7 +105,12 @@ export class Lightbox {
 
   destroy(): void {
     document.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("popstate", this.onPopState);
   }
+
+  private onPopState = (): void => {
+    this.closeView();
+  };
 
   /**
    * Deletes what is on screen, then shows whatever moved up into its place.
@@ -128,7 +151,7 @@ export class Lightbox {
 
   private onKeyDown = (event: KeyboardEvent): void => {
     if (!this.open) return;
-    if (event.key === "Escape") this.close();
+    if (event.key === "Escape" || event.key === "Backspace") this.close();
     else if (event.key === "ArrowLeft") this.step(-1);
     else if (event.key === "ArrowRight") this.step(1);
     else if (event.key === "Delete") void this.remove();
